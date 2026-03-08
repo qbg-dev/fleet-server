@@ -32,9 +32,9 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 146 tests, all passing
-- 51 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based)
-- 47 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware)
+## Test Summary: 154 tests, all passing
+- 55 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based, 4 pagination)
+- 51 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination boundaries)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -183,15 +183,28 @@
 - 146 tests (51 unit + 47 integration + 8 MCP + 4 CLI + 1 bench)
 - Zero clippy warnings
 
+### Cycle 14 — Pagination fix + refactoring (2026-03-08)
+- **Bug fix**: pagination used `<` comparison with extra item's timestamp as token,
+  causing the boundary item to be dropped on next page. Fixed to use `<=`.
+- Extracted 3 new helpers from sqlite.rs:
+  - `paginate_results`: shared pagination logic for list_messages/list_threads (eliminates .pop().unwrap())
+  - `attach_blobs`: extracted from insert_message
+  - `build_sent_message`: extracted from insert_message (now 48 lines, was 80)
+- 4 new unit tests: paginate_results (empty, under, at, over limit)
+- 4 new integration tests: exactly-at-limit, one-over-limit, single message, thread pagination boundary
+- 154 tests (55 unit + 51 integration + 8 MCP + 4 CLI + 1 bench)
+- Zero clippy warnings
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
 - [x] Background OVERDUE labeling (already implemented in Cycle 2-3)
 - [x] Mailing list fan-out on send
 - [x] CLI subcommands (serve, init, status, accounts)
-- [x] Refactoring: insert_message decomposition (187→70 lines)
+- [x] Refactoring: insert_message decomposition (187→48 lines)
 - [x] Analytics endpoint (per-account + system-wide stats)
 - [x] Documentation: README, rustdoc on core public types
 - [x] Property-based tests (proptest: parser, compression, blob, snippet)
 - [x] Production hardening: body size limit, request timeout, graceful shutdown
 - [x] Tower-http middleware: CORS, gzip compression, request tracing
+- [x] Pagination boundary fix + tests
