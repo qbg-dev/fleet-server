@@ -1,4 +1,4 @@
-use reqwest::Client;
+use reqwest::{Client, header};
 use serde_json::{json, Value};
 use std::net::TcpListener;
 
@@ -1891,4 +1891,106 @@ async fn test_body_size_limit_allows_small_request() {
         .json(&json!({"name": "alice"}))
         .send().await.unwrap();
     assert_eq!(resp.status(), 200, "small body should be accepted");
+}
+
+// ===== Cycle 13: Middleware tests (CORS, compression, tracing) =====
+
+#[tokio::test]
+async fn test_cors_headers_present() {
+    let (base, client) = spawn_server().await;
+
+    // Preflight OPTIONS request
+    let resp = client
+        .request(reqwest::Method::OPTIONS, format!("{base}/health"))
+        .header("Origin", "http://example.com")
+        .header("Access-Control-Request-Method", "GET")
+        .send()
+        .await
+        .unwrap();
+
+    assert!(
+        resp.headers().contains_key("access-control-allow-origin"),
+        "CORS allow-origin header should be present"
+    );
+}
+
+#[tokio::test]
+async fn test_cors_allows_any_origin() {
+    let (base, client) = spawn_server().await;
+
+    let resp = client
+        .get(format!("{base}/health"))
+        .header("Origin", "http://some-agent.local:9999")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let allow_origin = resp.headers().get("access-control-allow-origin")
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(allow_origin, Some("*"), "CORS should allow any origin");
+}
+
+#[tokio::test]
+async fn test_gzip_compression_when_accepted() {
+    let (base, _) = spawn_server().await;
+
+    // reqwest with gzip enabled auto-decompresses, so use a raw client
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap();
+
+    // Register an account and send a message with a large body
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+    let bob: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"}))
+        .send().await.unwrap().json().await.unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+    let bob_token = bob["bearerToken"].as_str().unwrap();
+
+    let large_body = "Hello world! ".repeat(200);
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(token)
+        .json(&json!({
+            "to": [bob_id],
+            "subject": "Compression test",
+            "body": large_body
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Request with Accept-Encoding: gzip
+    let resp = client
+        .get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(bob_token)
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    // Server should respond with content-encoding: gzip for large bodies
+    let encoding = resp.headers().get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert_eq!(encoding, "gzip", "server should gzip-compress large responses");
+}
+
+#[tokio::test]
+async fn test_health_includes_version() {
+    let (base, client) = spawn_server().await;
+    let resp: Value = client
+        .get(format!("{base}/health"))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(resp["status"], "ok");
+    assert_eq!(resp["service"], "boring-mail");
+    assert!(resp["version"].is_string(), "health should include version");
 }

@@ -16,7 +16,10 @@ pub mod webhooks;
 
 use axum::{Router, middleware, routing::{get, post, delete}};
 use axum::extract::DefaultBodyLimit;
+use tower_http::cors::{CorsLayer, Any};
+use tower_http::compression::CompressionLayer;
 use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::TraceLayer;
 use std::time::Duration;
 use crate::db::connection::DbPool;
 use crate::config::Config;
@@ -72,6 +75,15 @@ pub fn router(db: DbPool, config: &Config) -> Router {
             state.clone(),
             diagnostics::diagnostics_middleware,
         ))
+        // Response compression (gzip)
+        .layer(CompressionLayer::new())
+        // Request tracing (method, path, status, latency)
+        .layer(TraceLayer::new_for_http())
+        // CORS (permissive — agents call from anywhere)
+        .layer(CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any))
         // Body size limit
         .layer(DefaultBodyLimit::max(config.max_body_size))
         // Request timeout
