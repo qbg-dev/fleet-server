@@ -31,9 +31,10 @@
 | POST | /api/lists/:id/unsubscribe | Unsubscribe |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 94 tests, all passing
+## Test Summary: 102 tests, all passing
 - 33 unit tests (storage, search, parser, filter, blob, tmux)
 - 28 integration tests (HTTP API + conformance + edge cases)
+- 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - Duplicated across lib and bin crate targets
 
 ## Release Binary: 5.1MB (stripped, thin LTO)
@@ -100,8 +101,17 @@
 - 5 new edge case tests: thread reply chains, diagnostics unread tracking, body compression roundtrip, empty/nonexistent recipient handling
 - 94 tests (33 unit + 28 integration)
 
+### Cycle 6 — MCP stdio wrapper (2026-03-08)
+- `boring-mail-mcp` binary: MCP JSON-RPC 2.0 server over stdin/stdout
+- 9 tools: send_message, read_inbox, get_message, search_messages, modify_labels, trash_message, list_labels, list_threads, get_thread
+- Thin HTTP proxy via reqwest — configurable via BORING_MAIL_URL + BORING_MAIL_TOKEN env vars
+- Full MCP protocol: initialize, notifications/initialized, tools/list, tools/call, ping
+- Proper error handling: parse errors, method not found, unknown tools, missing args
+- 8 new tests: protocol, tool listing, notifications, error cases
+- 102 tests (33 unit + 28 integration + 8 MCP)
+
 ### Phase 7+: Continuous Polish
-- [ ] MCP stdio wrapper
+- [x] MCP stdio wrapper
 - [ ] Performance profiling
 - [ ] Background OVERDUE labeling
 - [x] Mailing list fan-out on send
