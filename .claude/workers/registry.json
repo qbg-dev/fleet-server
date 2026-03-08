@@ -1,0 +1,29 @@
+{
+  "_config": {
+    "commit_notify": [],
+    "merge_authority": "bms-chief",
+    "deploy_authority": "bms-chief",
+    "mission_authority": "bms-chief",
+    "tmux_session": "bms",
+    "project_name": "boring_mail_server"
+  },
+  "bms-chief": {
+    "model": "opus",
+    "permission_mode": "bypassPermissions",
+    "disallowed_tools": [],
+    "status": "active",
+    "perpetual": true,
+    "sleep_duration": 600,
+    "branch": "main",
+    "worktree": null,
+    "window": "orchestrator",
+    "pane_id": "%5",
+    "pane_target": "bms:orchestrator.0",
+    "tmux_session": "bms",
+    "session_id": null,
+    "session_file": null,
+    "mission_file": ".claude/workers/bms-chief/mission.md",
+    "custom": {},
+    "report_to": null
+  }
+}
