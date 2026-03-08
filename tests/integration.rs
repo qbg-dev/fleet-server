@@ -1353,8 +1353,7 @@ async fn test_send_to_nonexistent_list_rejected() {
         .send().await.unwrap().json().await.unwrap();
     let token = alice["bearerToken"].as_str().unwrap();
 
-    // Sending to "list:nonexistent" — list doesn't exist, recipient passed through
-    // as literal "list:nonexistent" which isn't a valid account ID → FK error
+    // Sending to "list:nonexistent" — list doesn't exist → 400 error
     let resp = client
         .post(format!("{base}/api/messages/send"))
         .bearer_auth(token)
@@ -1364,7 +1363,7 @@ async fn test_send_to_nonexistent_list_rejected() {
             "body": "hello"
         }))
         .send().await.unwrap();
-    assert!(resp.status().is_server_error() || resp.status().is_client_error());
+    assert_eq!(resp.status(), 400);
 }
 
 #[tokio::test]

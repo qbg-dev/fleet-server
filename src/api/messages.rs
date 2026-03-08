@@ -18,7 +18,7 @@ pub async fn send_message(
     }
 
     // Expand mailing list recipients into individual account IDs
-    let expanded_to = expand_list_recipients(&state.store, &req.to, &auth.0.id).await;
+    let expanded_to = expand_list_recipients(&state.store, &req.to, &auth.0.id).await?;
 
     // Capture for notification before moving into NewMessage
     let notify_recipients_list = expanded_to.clone();
@@ -239,31 +239,30 @@ async fn expand_list_recipients(
     store: &crate::storage::sqlite::SqliteDataStore,
     recipients: &[String],
     sender_id: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, ApiError> {
     let mut expanded: Vec<String> = Vec::new();
 
     for recipient in recipients {
         if let Some(list_name) = recipient.strip_prefix("list:") {
             // Look up list and expand to members
-            if let Ok((list_id, _, _)) = store.get_list_by_name(list_name).await {
-                if let Ok(members) = store.get_list_members(&list_id).await {
-                    for member in members {
-                        // Skip sender (no self-delivery) and dedup
-                        if member != sender_id && !expanded.contains(&member) {
-                            expanded.push(member);
-                        }
+            let (list_id, _, _) = store
+                .get_list_by_name(list_name)
+                .await
+                .map_err(|_| ApiError::BadRequest(format!("mailing list not found: {list_name}")))?;
+            if let Ok(members) = store.get_list_members(&list_id).await {
+                for member in members {
+                    // Skip sender (no self-delivery) and dedup
+                    if member != sender_id && !expanded.contains(&member) {
+                        expanded.push(member);
                     }
                 }
-            } else {
-                // Not a list, pass through as-is
-                expanded.push(recipient.clone());
             }
         } else if !expanded.contains(recipient) {
             expanded.push(recipient.clone());
         }
     }
 
-    expanded
+    Ok(expanded)
 }
 
 /// Look up each recipient's tmux pane and send a notification.
