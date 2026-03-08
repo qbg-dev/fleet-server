@@ -195,26 +195,7 @@ impl DataStore for SqliteDataStore {
                     "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source, compressed
                      FROM messages WHERE id = ?1",
                     rusqlite::params![id],
-                    |row| {
-                        let stored_body: String = row.get(4)?;
-                        let compressed: bool = row.get::<_, i32>(12)? != 0;
-                        Ok(Message {
-                            id: row.get(0)?,
-                            thread_id: row.get(1)?,
-                            from_account: row.get(2)?,
-                            subject: row.get(3)?,
-                            body: decompress_body(&stored_body, compressed),
-                            snippet: row.get(5)?,
-                            has_attachments: row.get::<_, i32>(6)? != 0,
-                            internal_date: row.get(7)?,
-                            in_reply_to: row.get(8)?,
-                            reply_by: row.get(9)?,
-                            reply_requested: row.get::<_, i32>(10)? != 0,
-                            labels: vec![],
-                            recipients: vec![],
-                            source: row.get(11)?,
-                        })
-                    },
+                    row_to_message,
                 )
                 .map_err(|e| match e {
                     rusqlite::Error::QueryReturnedNoRows => {
@@ -266,56 +247,22 @@ impl DataStore for SqliteDataStore {
 
         self.db
             .call(move |conn| {
-                let mut query = String::from(
-                    "SELECT m.id, m.thread_id, m.from_account, m.subject, m.body, m.snippet, m.has_attachments, m.internal_date, m.in_reply_to, m.reply_by, m.reply_requested, m.source, m.compressed
-                     FROM messages m
-                     JOIN message_labels ml ON m.id = ml.message_id
-                     WHERE ml.account_id = ?1 AND ml.label = ?2"
-                );
-
-                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-                    Box::new(account_id.clone()),
-                    Box::new(label.clone()),
-                ];
-
-                if let Some(ref token) = page_token {
-                    query.push_str(" AND m.internal_date <= ?3");
-                    params.push(Box::new(token.clone()));
-                }
-
-                query.push_str(" ORDER BY m.internal_date DESC LIMIT ?");
-                let limit = max_results + 1; // fetch one extra for next_page_token
-                params.push(Box::new(limit));
-
-                let mut stmt = conn.prepare(&query)?;
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-                let mut messages: Vec<Message> = stmt
-                    .query_map(param_refs.as_slice(), |row| {
-                        let stored_body: String = row.get(4)?;
-                        let compressed: bool = row.get::<_, i32>(12)? != 0;
-                        Ok(Message {
-                            id: row.get(0)?,
-                            thread_id: row.get(1)?,
-                            from_account: row.get(2)?,
-                            subject: row.get(3)?,
-                            body: decompress_body(&stored_body, compressed),
-                            snippet: row.get(5)?,
-                            has_attachments: row.get::<_, i32>(6)? != 0,
-                            internal_date: row.get(7)?,
-                            in_reply_to: row.get(8)?,
-                            reply_by: row.get(9)?,
-                            reply_requested: row.get::<_, i32>(10)? != 0,
-                            labels: vec![],
-                            recipients: vec![],
-                            source: row.get(11)?,
-                        })
-                    })?
-                    .filter_map(|r| r.ok())
-                    .collect();
-
-                let next_page_token = paginate_results(&mut messages, max_results, |m| {
-                    m.internal_date.clone()
-                });
+                let (messages, next_page_token) = run_paginated_list(
+                    conn,
+                    &PaginatedQuery {
+                        base_sql: "SELECT m.id, m.thread_id, m.from_account, m.subject, m.body, m.snippet, m.has_attachments, m.internal_date, m.in_reply_to, m.reply_by, m.reply_requested, m.source, m.compressed
+                         FROM messages m
+                         JOIN message_labels ml ON m.id = ml.message_id
+                         WHERE ml.account_id = ?1 AND ml.label = ?2",
+                        date_column: "m.internal_date",
+                        account_id: &account_id,
+                        label: &label,
+                        page_token: &page_token,
+                        max_results,
+                    },
+                    row_to_message,
+                    |m| m.internal_date.clone(),
+                )?;
 
                 Ok(MessageList {
                     result_size_estimate: messages.len() as u32,
@@ -747,26 +694,7 @@ impl DataStore for SqliteDataStore {
                      FROM messages WHERE thread_id = ?1 ORDER BY internal_date ASC"
                 )?;
                 let messages: Vec<Message> = stmt
-                    .query_map(rusqlite::params![thread.id], |row| {
-                        let stored_body: String = row.get(4)?;
-                        let compressed: bool = row.get::<_, i32>(12)? != 0;
-                        Ok(Message {
-                            id: row.get(0)?,
-                            thread_id: row.get(1)?,
-                            from_account: row.get(2)?,
-                            subject: row.get(3)?,
-                            body: decompress_body(&stored_body, compressed),
-                            snippet: row.get(5)?,
-                            has_attachments: row.get::<_, i32>(6)? != 0,
-                            internal_date: row.get(7)?,
-                            in_reply_to: row.get(8)?,
-                            reply_by: row.get(9)?,
-                            reply_requested: row.get::<_, i32>(10)? != 0,
-                            labels: vec![],
-                            recipients: vec![],
-                            source: row.get(11)?,
-                        })
-                    })?
+                    .query_map(rusqlite::params![thread.id], row_to_message)?
                     .filter_map(|r| r.ok())
                     .collect();
 
@@ -789,50 +717,23 @@ impl DataStore for SqliteDataStore {
 
         self.db
             .call(move |conn| {
-                let mut query = String::from(
-                    "SELECT DISTINCT t.id, t.subject, t.snippet, t.last_message_at, t.message_count, t.participants
-                     FROM threads t
-                     JOIN messages m ON m.thread_id = t.id
-                     JOIN message_labels ml ON ml.message_id = m.id
-                     WHERE ml.account_id = ?1 AND ml.label = ?2"
-                );
-
-                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-                    Box::new(account_id),
-                    Box::new(label),
-                ];
-
-                if let Some(ref token) = page_token {
-                    query.push_str(" AND t.last_message_at <= ?3");
-                    params.push(Box::new(token.clone()));
-                }
-
-                query.push_str(" ORDER BY t.last_message_at DESC LIMIT ?");
-                let limit = max_results + 1;
-                params.push(Box::new(limit));
-
-                let mut stmt = conn.prepare(&query)?;
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-                let mut threads: Vec<Thread> = stmt
-                    .query_map(param_refs.as_slice(), |row| {
-                        let participants_str: String = row.get(5)?;
-                        let participants: Vec<String> = serde_json::from_str(&participants_str).unwrap_or_default();
-                        Ok(Thread {
-                            id: row.get(0)?,
-                            subject: row.get(1)?,
-                            snippet: row.get(2)?,
-                            last_message_at: row.get(3)?,
-                            message_count: row.get(4)?,
-                            participants,
-                            messages: vec![],
-                        })
-                    })?
-                    .filter_map(|r| r.ok())
-                    .collect();
-
-                let next_page_token = paginate_results(&mut threads, max_results, |t| {
-                    t.last_message_at.clone()
-                });
+                let (threads, next_page_token) = run_paginated_list(
+                    conn,
+                    &PaginatedQuery {
+                        base_sql: "SELECT DISTINCT t.id, t.subject, t.snippet, t.last_message_at, t.message_count, t.participants
+                         FROM threads t
+                         JOIN messages m ON m.thread_id = t.id
+                         JOIN message_labels ml ON ml.message_id = m.id
+                         WHERE ml.account_id = ?1 AND ml.label = ?2",
+                        date_column: "t.last_message_at",
+                        account_id: &account_id,
+                        label: &label,
+                        page_token: &page_token,
+                        max_results,
+                    },
+                    row_to_thread,
+                    |t| t.last_message_at.clone(),
+                )?;
 
                 Ok(ThreadList {
                     result_size_estimate: threads.len() as u32,
@@ -992,6 +893,42 @@ impl DataStore for SqliteDataStore {
             .await
             .map_err(StorageError::from)
     }
+}
+
+fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
+    let stored_body: String = row.get(4)?;
+    let compressed: bool = row.get::<_, i32>(12)? != 0;
+    Ok(Message {
+        id: row.get(0)?,
+        thread_id: row.get(1)?,
+        from_account: row.get(2)?,
+        subject: row.get(3)?,
+        body: decompress_body(&stored_body, compressed),
+        snippet: row.get(5)?,
+        has_attachments: row.get::<_, i32>(6)? != 0,
+        internal_date: row.get(7)?,
+        in_reply_to: row.get(8)?,
+        reply_by: row.get(9)?,
+        reply_requested: row.get::<_, i32>(10)? != 0,
+        labels: vec![],
+        recipients: vec![],
+        source: row.get(11)?,
+    })
+}
+
+fn row_to_thread(row: &rusqlite::Row) -> rusqlite::Result<Thread> {
+    let participants_str: String = row.get(5)?;
+    let participants: Vec<String> =
+        serde_json::from_str(&participants_str).unwrap_or_default();
+    Ok(Thread {
+        id: row.get(0)?,
+        subject: row.get(1)?,
+        snippet: row.get(2)?,
+        last_message_at: row.get(3)?,
+        message_count: row.get(4)?,
+        participants,
+        messages: vec![],
+    })
 }
 
 fn row_to_account(row: &rusqlite::Row) -> rusqlite::Result<Account> {
@@ -1176,6 +1113,54 @@ fn paginate_results<T, F: FnOnce(&T) -> String>(
     } else {
         None
     }
+}
+
+/// Parameters for a paginated list query.
+struct PaginatedQuery<'a> {
+    base_sql: &'a str,
+    date_column: &'a str,
+    account_id: &'a str,
+    label: &'a str,
+    page_token: &'a Option<String>,
+    max_results: u32,
+}
+
+/// Execute a paginated list query with dynamic params, page_token filtering, and pagination.
+fn run_paginated_list<T, F, G>(
+    conn: &rusqlite::Connection,
+    q: &PaginatedQuery<'_>,
+    row_mapper: F,
+    token_fn: G,
+) -> Result<(Vec<T>, Option<String>), tokio_rusqlite::Error>
+where
+    F: FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
+    G: FnOnce(&T) -> String,
+{
+    let mut query = String::from(q.base_sql);
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+        Box::new(q.account_id.to_string()),
+        Box::new(q.label.to_string()),
+    ];
+
+    if let Some(token) = q.page_token {
+        query.push_str(&format!(" AND {} <= ?3", q.date_column));
+        params.push(Box::new(token.clone()));
+    }
+
+    query.push_str(&format!(" ORDER BY {} DESC LIMIT ?", q.date_column));
+    let limit = q.max_results + 1;
+    params.push(Box::new(limit));
+
+    let mut stmt = conn.prepare(&query)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(|p| p.as_ref()).collect();
+    let mut items: Vec<T> = stmt
+        .query_map(param_refs.as_slice(), row_mapper)?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let next_page_token = paginate_results(&mut items, q.max_results, token_fn);
+    Ok((items, next_page_token))
 }
 
 /// Link blob attachments to a message and set has_attachments flag.
