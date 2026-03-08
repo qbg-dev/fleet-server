@@ -153,55 +153,10 @@ impl DataStore for SqliteDataStore {
                 let snippet = make_snippet(&msg.body);
                 let reply_requested = msg.reply_by.is_some();
 
-                // Resolve or create thread
-                let thread_id = if let Some(ref tid) = msg.thread_id {
-                    // Verify thread exists
-                    let exists: bool = tx.query_row(
-                        "SELECT COUNT(*) > 0 FROM threads WHERE id = ?1",
-                        rusqlite::params![tid],
-                        |row| row.get(0),
-                    )?;
-                    if !exists {
-                        return Err(tokio_rusqlite::Error::Other(Box::new(
-                            StorageError::NotFound(format!("thread {tid}")),
-                        )));
-                    }
-                    tid.clone()
-                } else if let Some(ref reply_to) = msg.in_reply_to {
-                    // Inherit thread from parent
-                    tx.query_row(
-                        "SELECT thread_id FROM messages WHERE id = ?1",
-                        rusqlite::params![reply_to],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .map_err(|_| {
-                        tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(
-                            format!("in_reply_to message {reply_to}"),
-                        )))
-                    })?
-                } else {
-                    // New thread
-                    let tid = uuid::Uuid::new_v4().to_string();
-                    tx.execute(
-                        "INSERT INTO threads (id, subject, snippet, last_message_at, message_count, participants) VALUES (?1, ?2, ?3, ?4, 0, '[]')",
-                        rusqlite::params![tid, msg.subject, snippet, now],
-                    )?;
-                    tid
-                };
+                let thread_id = resolve_thread(&tx, &msg, &snippet, &now)?;
+                let (stored_body, compressed) = compress_body(&msg.body)?;
 
-                // Compress body if > 512 bytes
-                let (stored_body, compressed) = if msg.body.len() > 512 {
-                    let encoded = zstd::encode_all(msg.body.as_bytes(), 3)
-                        .map_err(|e| tokio_rusqlite::Error::Other(Box::new(StorageError::BlobIo(e))))?;
-                    // Use base64 to store compressed bytes in TEXT column
-                    use base64::Engine;
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&encoded);
-                    (b64, true)
-                } else {
-                    (msg.body.clone(), false)
-                };
-
-                // Insert message
+                // Insert message row
                 tx.execute(
                     "INSERT INTO messages (id, thread_id, from_account, subject, body, snippet, internal_date, in_reply_to, reply_by, reply_requested, source, compressed)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
@@ -211,69 +166,10 @@ impl DataStore for SqliteDataStore {
                     ],
                 )?;
 
-                // Insert recipients
-                for to in &msg.to {
-                    tx.execute(
-                        "INSERT INTO message_recipients (message_id, account_id, recipient_type) VALUES (?1, ?2, 'to')",
-                        rusqlite::params![msg_id, to],
-                    )?;
-                }
-                for cc in &msg.cc {
-                    tx.execute(
-                        "INSERT INTO message_recipients (message_id, account_id, recipient_type) VALUES (?1, ?2, 'cc')",
-                        rusqlite::params![msg_id, cc],
-                    )?;
-                }
-
-                // Assign labels: sender gets SENT, recipients get INBOX + UNREAD
-                tx.execute(
-                    "INSERT INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'SENT')",
-                    rusqlite::params![msg_id, msg.from_account],
-                )?;
+                insert_recipients_and_labels(&tx, &msg_id, &msg)?;
 
                 let all_recipients: Vec<&str> = msg.to.iter().chain(msg.cc.iter()).map(|s| s.as_str()).collect();
-                for recip in &all_recipients {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'INBOX')",
-                        rusqlite::params![msg_id, recip],
-                    )?;
-                    tx.execute(
-                        "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'UNREAD')",
-                        rusqlite::params![msg_id, recip],
-                    )?;
-                }
-
-                // Custom labels from request
-                for label in &msg.labels {
-                    // Add to sender
-                    tx.execute(
-                        "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, ?3)",
-                        rusqlite::params![msg_id, msg.from_account, label],
-                    )?;
-                    // If ISSUE label, also add OPEN
-                    if label == "ISSUE" {
-                        tx.execute(
-                            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'OPEN')",
-                            rusqlite::params![msg_id, msg.from_account],
-                        )?;
-                    }
-                }
-
-                // Update thread
-                let participants_json = {
-                    let mut parts: Vec<String> = vec![msg.from_account.clone()];
-                    for r in &all_recipients {
-                        if !parts.contains(&r.to_string()) {
-                            parts.push(r.to_string());
-                        }
-                    }
-                    serde_json::to_string(&parts).unwrap_or_else(|_| "[]".to_string())
-                };
-
-                tx.execute(
-                    "UPDATE threads SET snippet = ?1, last_message_at = ?2, message_count = message_count + 1, participants = ?3 WHERE id = ?4",
-                    rusqlite::params![snippet, now, participants_json, thread_id],
-                )?;
+                update_thread_metadata(&tx, &thread_id, &msg.from_account, &all_recipients, &snippet, &now)?;
 
                 // Index in FTS5
                 tx.execute(
@@ -1123,6 +1019,137 @@ fn make_snippet(body: &str) -> String {
     } else {
         s
     }
+}
+
+/// Resolve thread ID: use explicit, inherit from parent, or create new.
+fn resolve_thread(
+    tx: &rusqlite::Transaction,
+    msg: &NewMessage,
+    snippet: &str,
+    now: &str,
+) -> Result<String, tokio_rusqlite::Error> {
+    if let Some(ref tid) = msg.thread_id {
+        let exists: bool = tx.query_row(
+            "SELECT COUNT(*) > 0 FROM threads WHERE id = ?1",
+            rusqlite::params![tid],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(tokio_rusqlite::Error::Other(Box::new(
+                StorageError::NotFound(format!("thread {tid}")),
+            )));
+        }
+        Ok(tid.clone())
+    } else if let Some(ref reply_to) = msg.in_reply_to {
+        tx.query_row(
+            "SELECT thread_id FROM messages WHERE id = ?1",
+            rusqlite::params![reply_to],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|_| {
+            tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(
+                format!("in_reply_to message {reply_to}"),
+            )))
+        })
+    } else {
+        let tid = uuid::Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO threads (id, subject, snippet, last_message_at, message_count, participants) VALUES (?1, ?2, ?3, ?4, 0, '[]')",
+            rusqlite::params![tid, msg.subject, snippet, now],
+        )?;
+        Ok(tid)
+    }
+}
+
+/// Compress body if > 512 bytes using zstd + base64.
+fn compress_body(body: &str) -> Result<(String, bool), tokio_rusqlite::Error> {
+    if body.len() > 512 {
+        let encoded = zstd::encode_all(body.as_bytes(), 3)
+            .map_err(|e| tokio_rusqlite::Error::Other(Box::new(StorageError::BlobIo(e))))?;
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&encoded);
+        Ok((b64, true))
+    } else {
+        Ok((body.to_string(), false))
+    }
+}
+
+/// Insert recipients and assign labels (SENT for sender, INBOX+UNREAD for recipients).
+fn insert_recipients_and_labels(
+    tx: &rusqlite::Transaction,
+    msg_id: &str,
+    msg: &NewMessage,
+) -> Result<(), rusqlite::Error> {
+    for to in &msg.to {
+        tx.execute(
+            "INSERT INTO message_recipients (message_id, account_id, recipient_type) VALUES (?1, ?2, 'to')",
+            rusqlite::params![msg_id, to],
+        )?;
+    }
+    for cc in &msg.cc {
+        tx.execute(
+            "INSERT INTO message_recipients (message_id, account_id, recipient_type) VALUES (?1, ?2, 'cc')",
+            rusqlite::params![msg_id, cc],
+        )?;
+    }
+
+    // Sender gets SENT
+    tx.execute(
+        "INSERT INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'SENT')",
+        rusqlite::params![msg_id, msg.from_account],
+    )?;
+
+    // Recipients get INBOX + UNREAD
+    for recip in msg.to.iter().chain(msg.cc.iter()) {
+        tx.execute(
+            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'INBOX')",
+            rusqlite::params![msg_id, recip],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'UNREAD')",
+            rusqlite::params![msg_id, recip],
+        )?;
+    }
+
+    // Custom labels
+    for label in &msg.labels {
+        tx.execute(
+            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, ?3)",
+            rusqlite::params![msg_id, msg.from_account, label],
+        )?;
+        if label == "ISSUE" {
+            tx.execute(
+                "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'OPEN')",
+                rusqlite::params![msg_id, msg.from_account],
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Update thread metadata after inserting a message.
+fn update_thread_metadata(
+    tx: &rusqlite::Transaction,
+    thread_id: &str,
+    from: &str,
+    recipients: &[&str],
+    snippet: &str,
+    now: &str,
+) -> Result<(), rusqlite::Error> {
+    let mut parts: Vec<String> = vec![from.to_string()];
+    for r in recipients {
+        if !parts.contains(&r.to_string()) {
+            parts.push(r.to_string());
+        }
+    }
+    let participants_json = serde_json::to_string(&parts).unwrap_or_else(|_| "[]".to_string());
+
+    tx.execute(
+        "UPDATE threads SET snippet = ?1, last_message_at = ?2, message_count = message_count + 1, participants = ?3 WHERE id = ?4",
+        rusqlite::params![snippet, now, participants_json, thread_id],
+    )?;
+    Ok(())
 }
 
 fn storage_err_from_tokio(e: tokio_rusqlite::Error) -> StorageError {
