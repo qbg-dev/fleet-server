@@ -134,7 +134,7 @@ impl DataStore for SqliteDataStore {
             .call(move |conn| {
                 let tx = conn.transaction()?;
                 let msg_id = uuid::Uuid::new_v4().to_string();
-                let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
                 let snippet = make_snippet(&msg.body);
                 let reply_requested = msg.reply_by.is_some();
 

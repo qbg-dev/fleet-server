@@ -964,6 +964,265 @@ async fn test_conformance_response_shapes() {
 }
 
 #[tokio::test]
+async fn test_conformance_pagination() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Send 5 messages (microsecond timestamp precision ensures unique ordering)
+    for i in 0..5 {
+        client
+            .post(format!("{base}/api/messages/send"))
+            .bearer_auth(sender_token)
+            .json(&json!({
+                "to": [recipient_id],
+                "subject": format!("Pagination test {i}"),
+                "body": format!("Body {i}")
+            }))
+            .send().await.unwrap();
+    }
+
+    // List with maxResults=2 to trigger pagination
+    let page1: Value = client
+        .get(format!("{base}/api/messages?label=INBOX&maxResults=2"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(page1["messages"].is_array());
+    assert_eq!(page1["messages"].as_array().unwrap().len(), 2);
+    assert!(page1["nextPageToken"].is_string(), "should have nextPageToken when more results exist");
+    assert!(page1["resultSizeEstimate"].is_number());
+
+    // Fetch page 2
+    let token = page1["nextPageToken"].as_str().unwrap();
+    let page2: Value = client
+        .get(format!("{base}/api/messages?label=INBOX&maxResults=2&pageToken={token}"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(page2["messages"].is_array());
+    assert_eq!(page2["messages"].as_array().unwrap().len(), 2);
+
+    // Page 3 should have 1 message
+    if let Some(token2) = page2["nextPageToken"].as_str() {
+        let page3: Value = client
+            .get(format!("{base}/api/messages?label=INBOX&maxResults=2&pageToken={token2}"))
+            .bearer_auth(recipient_token)
+            .send().await.unwrap().json().await.unwrap();
+
+        assert!(page3["messages"].is_array());
+        assert_eq!(page3["messages"].as_array().unwrap().len(), 1);
+        // Last page: nextPageToken should be null
+        assert!(page3["nextPageToken"].is_null());
+    }
+}
+
+#[tokio::test]
+async fn test_conformance_label_crud_shapes() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "label-tester"}))
+        .send().await.unwrap().json().await.unwrap();
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Send a message so system labels appear in counts
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Label test",
+            "body": "body"
+        }))
+        .send().await.unwrap();
+
+    // Create label response shape
+    let created: Value = client
+        .post(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .json(&json!({"name": "IMPORTANT"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(created["id"].is_string());
+    assert_eq!(created["name"], "IMPORTANT");
+    assert_eq!(created["type"], "user");
+
+    // List labels — verify system labels present (need messages for them to show)
+    let labels: Value = client
+        .get(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .send().await.unwrap().json().await.unwrap();
+
+    let labels_arr = labels["labels"].as_array().unwrap();
+    let label_names: Vec<&str> = labels_arr.iter()
+        .filter_map(|l| l["name"].as_str())
+        .collect();
+    // INBOX and UNREAD should appear since we received a message
+    assert!(label_names.contains(&"INBOX"));
+    assert!(label_names.contains(&"UNREAD"));
+
+    // Each label has correct shape
+    for label in labels_arr {
+        assert!(label["name"].is_string());
+        assert!(label["type"].is_string());
+        assert!(label["messagesTotal"].is_number());
+        assert!(label["messagesUnread"].is_number());
+    }
+
+    // Delete label
+    let del_resp = client
+        .delete(format!("{base}/api/labels/IMPORTANT"))
+        .bearer_auth(token)
+        .send().await.unwrap();
+    assert_eq!(del_resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_conformance_modify_shapes() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Modify shape test",
+            "body": "body"
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Modify response shape
+    let modified: Value = client
+        .post(format!("{base}/api/messages/{msg_id}/modify"))
+        .bearer_auth(recipient_token)
+        .json(&json!({
+            "addLabelIds": ["STARRED"],
+            "removeLabelIds": ["UNREAD"]
+        }))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(modified["id"], msg_id);
+    assert!(modified["labelIds"].is_array());
+    let label_ids: Vec<&str> = modified["labelIds"].as_array().unwrap()
+        .iter().filter_map(|v| v.as_str()).collect();
+    assert!(label_ids.contains(&"STARRED"));
+    assert!(!label_ids.contains(&"UNREAD"));
+    assert!(label_ids.contains(&"INBOX"));
+
+    // Trash response shape
+    let trashed: Value = client
+        .post(format!("{base}/api/messages/{msg_id}/trash"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(trashed["id"], msg_id);
+    assert!(trashed["labelIds"].is_array());
+
+    // Batch modify shape
+    let batch: Value = client
+        .post(format!("{base}/api/messages/batchModify"))
+        .bearer_auth(recipient_token)
+        .json(&json!({
+            "ids": [msg_id],
+            "addLabelIds": ["STARRED"]
+        }))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(batch["modified"].is_number());
+
+    // Delete response shape
+    let deleted: Value = client
+        .delete(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(deleted["deleted"].is_boolean());
+    assert_eq!(deleted["deleted"], true);
+}
+
+#[tokio::test]
+async fn test_conformance_search_shape() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Searchable unique keyword xyzzy",
+            "body": "body text"
+        }))
+        .send().await.unwrap();
+
+    // Search response shape
+    let results: Value = client
+        .get(format!("{base}/api/search?q=xyzzy"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(results["messages"].is_array());
+    assert!(results["resultSizeEstimate"].is_number());
+    let msgs = results["messages"].as_array().unwrap();
+    assert!(!msgs.is_empty());
+    assert!(msgs[0]["id"].is_string());
+
+    // Search with no results
+    let empty: Value = client
+        .get(format!("{base}/api/search?q=nonexistentkeyword"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(empty["messages"].is_array());
+    assert_eq!(empty["messages"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn test_update_pane() {
     let (base, client) = spawn_server().await;
 
