@@ -23,6 +23,10 @@ pub struct Config {
     pub admin_token: Option<String>,
     /// Optional path to worker-fleet registry.json for auto-provisioning accounts.
     pub registry_path: Option<PathBuf>,
+    /// Maximum request body size in bytes (default: 10MB).
+    pub max_body_size: usize,
+    /// Request timeout in seconds (default: 30).
+    pub request_timeout_secs: u64,
 }
 
 impl Config {
@@ -44,6 +48,14 @@ impl Config {
             blob_dir,
             admin_token: std::env::var("BORING_MAIL_ADMIN_TOKEN").ok(),
             registry_path: std::env::var("BORING_MAIL_REGISTRY").ok().map(PathBuf::from),
+            max_body_size: std::env::var("BORING_MAIL_MAX_BODY")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10 * 1024 * 1024), // 10MB
+            request_timeout_secs: std::env::var("BORING_MAIL_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
         }
     }
 }

@@ -19,6 +19,8 @@ async fn spawn_server() -> (String, Client) {
         data_dir,
         admin_token: None,
         registry_path: None,
+        max_body_size: 10 * 1024 * 1024,
+        request_timeout_secs: 30,
     };
 
     let db = boring_mail::db::connection::setup(&config).await.unwrap();

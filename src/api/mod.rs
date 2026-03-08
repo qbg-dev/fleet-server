@@ -15,6 +15,9 @@ pub mod threads;
 pub mod webhooks;
 
 use axum::{Router, middleware, routing::{get, post, delete}};
+use axum::extract::DefaultBodyLimit;
+use tower_http::timeout::TimeoutLayer;
+use std::time::Duration;
 use crate::db::connection::DbPool;
 use crate::config::Config;
 use crate::storage::sqlite::SqliteDataStore;
@@ -68,6 +71,13 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             diagnostics::diagnostics_middleware,
+        ))
+        // Body size limit
+        .layer(DefaultBodyLimit::max(config.max_body_size))
+        // Request timeout
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(config.request_timeout_secs),
         ))
         .with_state(state)
 }

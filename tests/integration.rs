@@ -1,6 +1,42 @@
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::net::TcpListener;
+
+async fn spawn_server_with_config(max_body: usize) -> (String, Client) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    let config = boring_mail::config::Config {
+        bind_addr: format!("127.0.0.1:{port}"),
+        db_path: data_dir.join("mail.db"),
+        blob_dir: data_dir.join("blobs"),
+        data_dir,
+        admin_token: None,
+        registry_path: None,
+        max_body_size: max_body,
+        request_timeout_secs: 30,
+    };
+
+    let db = boring_mail::db::connection::setup(&config).await.unwrap();
+    let app = boring_mail::api::router(db, &config);
+
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+
+    tokio::spawn(async move {
+        let _tmp = tmp;
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = Client::new();
+    (base, client)
+}
+
 async fn spawn_server() -> (String, Client) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -15,6 +51,8 @@ async fn spawn_server() -> (String, Client) {
         data_dir,
         admin_token: None,
         registry_path: None,
+        max_body_size: 10 * 1024 * 1024,
+        request_timeout_secs: 30,
     };
 
     let db = boring_mail::db::connection::setup(&config).await.unwrap();
@@ -1808,4 +1846,49 @@ async fn test_label_long_name_rejected() {
         .json(&json!({"name": long_name}))
         .send().await.unwrap();
     assert_eq!(resp.status(), 400);
+}
+
+// ===== Cycle 12: Production hardening tests =====
+
+#[tokio::test]
+async fn test_body_size_limit_rejects_oversized_request() {
+    // Spawn server with 1KB body limit
+    let (base, client) = spawn_server_with_config(1024).await;
+
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+    let bob: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"}))
+        .send().await.unwrap().json().await.unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+
+    // Body > 1KB should be rejected
+    let big_body = "X".repeat(2000);
+    let resp = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(token)
+        .json(&json!({
+            "to": [bob_id],
+            "subject": "Big message",
+            "body": big_body
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 413, "oversized body should return 413 Payload Too Large");
+}
+
+#[tokio::test]
+async fn test_body_size_limit_allows_small_request() {
+    // Spawn server with 1KB body limit
+    let (base, client) = spawn_server_with_config(1024).await;
+
+    // Account creation is small enough
+    let resp = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200, "small body should be accepted");
 }

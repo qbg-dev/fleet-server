@@ -90,6 +90,8 @@ mod tests {
             blob_dir: tmp.path().join("blobs"),
             admin_token: None,
             registry_path: None,
+            max_body_size: 10 * 1024 * 1024,
+            request_timeout_secs: 30,
         }
     }
 
