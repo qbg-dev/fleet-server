@@ -32,9 +32,9 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 140 tests, all passing
+## Test Summary: 142 tests, all passing
 - 51 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based)
-- 41 integration tests (HTTP API + conformance + edge cases + analytics + hardening)
+- 43 integration tests (HTTP API + conformance + edge cases + analytics + hardening)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -166,6 +166,14 @@
 - 140 tests (51 unit + 41 integration + 8 MCP + 4 CLI + 1 bench)
 - Zero clippy warnings
 
+### Cycle 12 — Production hardening (2026-03-08)
+- Request body size limit: `DefaultBodyLimit` layer (10MB default, configurable via `BORING_MAIL_MAX_BODY`)
+- Request timeout: `TimeoutLayer` with 408 status code (30s default, configurable via `BORING_MAIL_TIMEOUT`)
+- Graceful shutdown: SIGTERM/SIGINT handler drains in-flight requests before exit
+- 2 new integration tests: oversized body rejected (413), small body accepted
+- 142 tests (51 unit + 43 integration + 8 MCP + 4 CLI + 1 bench)
+- Zero clippy warnings
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
@@ -176,3 +184,4 @@
 - [x] Analytics endpoint (per-account + system-wide stats)
 - [x] Documentation: README, rustdoc on core public types
 - [x] Property-based tests (proptest: parser, compression, blob, snippet)
+- [x] Production hardening: body size limit, request timeout, graceful shutdown
