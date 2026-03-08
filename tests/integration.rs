@@ -2177,3 +2177,35 @@ async fn test_thread_pagination_boundary() {
     assert_eq!(resp["threads"].as_array().unwrap().len(), 2);
     assert!(resp["nextPageToken"].is_string(), "should paginate threads");
 }
+
+#[tokio::test]
+async fn test_request_id_header() {
+    let (base, client) = spawn_server().await;
+
+    let resp = client
+        .get(format!("{base}/health"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let request_id = resp.headers().get("x-request-id");
+    assert!(request_id.is_some(), "response should have x-request-id header");
+    let id_str = request_id.unwrap().to_str().unwrap();
+    assert!(!id_str.is_empty(), "x-request-id should not be empty");
+    // Should be a valid UUID
+    assert_eq!(id_str.len(), 36, "x-request-id should be a UUID (36 chars)");
+}
+
+#[tokio::test]
+async fn test_request_id_unique_per_request() {
+    let (base, client) = spawn_server().await;
+
+    let resp1 = client.get(format!("{base}/health")).send().await.unwrap();
+    let resp2 = client.get(format!("{base}/health")).send().await.unwrap();
+
+    let id1 = resp1.headers().get("x-request-id").unwrap().to_str().unwrap().to_string();
+    let id2 = resp2.headers().get("x-request-id").unwrap().to_str().unwrap().to_string();
+
+    assert_ne!(id1, id2, "each request should get a unique x-request-id");
+}

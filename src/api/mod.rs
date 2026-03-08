@@ -20,6 +20,7 @@ use tower_http::cors::{CorsLayer, Any};
 use tower_http::compression::CompressionLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
+use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer, PropagateRequestIdLayer};
 use std::time::Duration;
 use crate::db::connection::DbPool;
 use crate::config::Config;
@@ -75,10 +76,14 @@ pub fn router(db: DbPool, config: &Config) -> Router {
             state.clone(),
             diagnostics::diagnostics_middleware,
         ))
+        // Propagate x-request-id to response
+        .layer(PropagateRequestIdLayer::x_request_id())
         // Response compression (gzip)
         .layer(CompressionLayer::new())
         // Request tracing (method, path, status, latency)
         .layer(TraceLayer::new_for_http())
+        // Assign x-request-id to each request (UUID v4)
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         // CORS (permissive — agents call from anywhere)
         .layer(CorsLayer::new()
             .allow_origin(Any)
