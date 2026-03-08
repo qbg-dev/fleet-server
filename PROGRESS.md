@@ -32,9 +32,9 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 142 tests, all passing
+## Test Summary: 146 tests, all passing
 - 51 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based)
-- 43 integration tests (HTTP API + conformance + edge cases + analytics + hardening)
+- 47 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -174,6 +174,15 @@
 - 142 tests (51 unit + 43 integration + 8 MCP + 4 CLI + 1 bench)
 - Zero clippy warnings
 
+### Cycle 13 — Tower-http middleware activation (2026-03-08)
+- Wired up 3 tower-http layers that were declared in Cargo.toml but unused:
+  - **CorsLayer**: permissive CORS (allow any origin/method/header) for cross-origin agent access
+  - **CompressionLayer**: gzip response compression for large payloads
+  - **TraceLayer**: structured request/response logging (method, path, status, latency)
+- 4 new integration tests: CORS headers present, CORS allows any origin, gzip encoding, health version
+- 146 tests (51 unit + 47 integration + 8 MCP + 4 CLI + 1 bench)
+- Zero clippy warnings
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
@@ -185,3 +194,4 @@
 - [x] Documentation: README, rustdoc on core public types
 - [x] Property-based tests (proptest: parser, compression, blob, snippet)
 - [x] Production hardening: body size limit, request timeout, graceful shutdown
+- [x] Tower-http middleware: CORS, gzip compression, request tracing
