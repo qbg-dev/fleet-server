@@ -16,10 +16,13 @@ pub enum StorageError {
 pub enum MessageError {
     #[error("storage: {0}")]
     Storage(#[from] StorageError),
+    #[allow(dead_code)]
     #[error("invalid recipient: {0}")]
     InvalidRecipient(String),
+    #[allow(dead_code)]
     #[error("empty recipients")]
     EmptyRecipients,
+    #[allow(dead_code)]
     #[error("validation: {0}")]
     Validation(String),
 }

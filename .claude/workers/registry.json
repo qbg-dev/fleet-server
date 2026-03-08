@@ -24,6 +24,11 @@
     "session_file": null,
     "mission_file": ".claude/workers/bms-chief/mission.md",
     "custom": {},
-    "report_to": null
+    "report_to": null,
+    "watchdog_relaunches": 6,
+    "last_relaunch": {
+      "at": "2026-03-08T08:56:06Z",
+      "reason": "sleep-complete (618s of 600s)"
+    }
   }
 }

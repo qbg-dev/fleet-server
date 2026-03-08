@@ -258,10 +258,8 @@ async fn expand_list_recipients(
                 // Not a list, pass through as-is
                 expanded.push(recipient.clone());
             }
-        } else {
-            if !expanded.contains(recipient) {
-                expanded.push(recipient.clone());
-            }
+        } else if !expanded.contains(recipient) {
+            expanded.push(recipient.clone());
         }
     }
 

@@ -302,7 +302,7 @@ impl DataStore for SqliteDataStore {
                     subject: msg.subject,
                     body: msg.body,
                     snippet: snippet.to_string(),
-                    has_attachments: has_attachments,
+                    has_attachments,
                     internal_date: now,
                     in_reply_to: msg.in_reply_to,
                     reply_by: msg.reply_by,

@@ -24,8 +24,6 @@ impl SqliteSearchStore {
     ) -> Result<Vec<String>, StorageError> {
         let parsed = SearchQuery::parse(query_str);
         let compiled = CompiledQuery::from_query(&parsed, account_id);
-        let max_results = max_results;
-
         self.db
             .call(move |conn| {
                 let mut sql = String::from("SELECT m.id FROM messages m");

@@ -60,6 +60,7 @@ pub struct UpdatePaneRequest {
     pub pane_id: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct Diagnostics {
     pub unread_count: u32,

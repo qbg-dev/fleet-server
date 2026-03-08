@@ -6,6 +6,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub db_path: PathBuf,
     pub blob_dir: PathBuf,
+    #[allow(dead_code)]
     pub admin_token: Option<String>,
     pub registry_path: Option<PathBuf>,
 }

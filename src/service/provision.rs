@@ -50,20 +50,20 @@ pub async fn provision_from_registry<D: DataStore>(
     // Write tokens back to registry
     let mut changed = false;
     for (name, token) in &updates {
-        if let Some(entry) = obj.get_mut(name) {
-            if let Some(entry_obj) = entry.as_object_mut() {
-                let custom = entry_obj
-                    .entry("custom")
-                    .or_insert_with(|| serde_json::json!({}));
-                if let Some(custom_obj) = custom.as_object_mut() {
-                    let existing = custom_obj.get("mail_token").and_then(|v| v.as_str());
-                    if existing != Some(token) {
-                        custom_obj.insert(
-                            "mail_token".to_string(),
-                            serde_json::Value::String(token.clone()),
-                        );
-                        changed = true;
-                    }
+        if let Some(entry) = obj.get_mut(name)
+            && let Some(entry_obj) = entry.as_object_mut()
+        {
+            let custom = entry_obj
+                .entry("custom")
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(custom_obj) = custom.as_object_mut() {
+                let existing = custom_obj.get("mail_token").and_then(|v| v.as_str());
+                if existing != Some(token) {
+                    custom_obj.insert(
+                        "mail_token".to_string(),
+                        serde_json::Value::String(token.clone()),
+                    );
+                    changed = true;
                 }
             }
         }

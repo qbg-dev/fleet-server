@@ -110,8 +110,6 @@ pub async fn diagnostics_middleware(
     let new_bytes = serde_json::to_vec(&json).unwrap_or_else(|_| bytes.to_vec());
     let len = new_bytes.len();
     let mut response = Response::from_parts(parts, Body::from(new_bytes));
-    if let Ok(len) = len.try_into() {
-        response.headers_mut().insert(header::CONTENT_LENGTH, len);
-    }
+    response.headers_mut().insert(header::CONTENT_LENGTH, len.into());
     response
 }

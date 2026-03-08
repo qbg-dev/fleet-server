@@ -31,6 +31,7 @@ pub trait DataStore: Send + Sync + 'static {
     async fn delete_label(&self, account_id: &str, name: &str) -> Result<(), StorageError>;
 
     // Attachments
+    #[allow(dead_code)]
     async fn attach_blob(&self, message_id: &str, blob_hash: &str, filename: &str, content_type: &str, size: u64) -> Result<(), StorageError>;
     async fn get_attachments(&self, message_id: &str) -> Result<Vec<Attachment>, StorageError>;
 
@@ -61,6 +62,7 @@ pub trait DataStore: Send + Sync + 'static {
 pub trait BlobStore: Send + Sync + 'static {
     async fn store_blob(&self, data: &[u8]) -> Result<BlobMeta, StorageError>;
     async fn get_blob(&self, hash: &str) -> Result<Vec<u8>, StorageError>;
+    #[allow(dead_code)]
     async fn blob_exists(&self, hash: &str) -> Result<bool, StorageError>;
 }
 
@@ -68,6 +70,8 @@ pub trait BlobStore: Send + Sync + 'static {
 #[allow(async_fn_in_trait)]
 pub trait SearchStore: Send + Sync + 'static {
     async fn search(&self, account_id: &str, query: &str, max_results: u32) -> Result<Vec<String>, StorageError>;
+    #[allow(dead_code)]
     async fn index_message(&self, id: &str, subject: &str, body: &str) -> Result<(), StorageError>;
+    #[allow(dead_code)]
     async fn remove_from_index(&self, id: &str) -> Result<(), StorageError>;
 }
