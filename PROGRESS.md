@@ -149,6 +149,12 @@
   - Empty inbox pagination (null nextPageToken)
 - 124 tests (35 unit + 41 integration + 8 MCP + 4 CLI + 1 bench)
 
+### Cycle 10 — Documentation (2026-03-08)
+- README.md: quick start, API reference (24 endpoints), architecture diagram, CLI, MCP, config
+- Rustdoc on core public types: lib.rs module docs, Config, error enums, storage traits, all 13 data models
+- Zero clippy warnings, zero rustdoc warnings
+- 124 tests still passing
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
@@ -157,3 +163,4 @@
 - [x] CLI subcommands (serve, init, status, accounts)
 - [x] Refactoring: insert_message decomposition (187→70 lines)
 - [x] Analytics endpoint (per-account + system-wide stats)
+- [x] Documentation: README, rustdoc on core public types
