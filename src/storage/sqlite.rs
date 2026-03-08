@@ -174,13 +174,25 @@ impl DataStore for SqliteDataStore {
                     tid
                 };
 
+                // Compress body if > 512 bytes
+                let (stored_body, compressed) = if msg.body.len() > 512 {
+                    let encoded = zstd::encode_all(msg.body.as_bytes(), 3)
+                        .map_err(|e| tokio_rusqlite::Error::Other(Box::new(StorageError::BlobIo(e))))?;
+                    // Use base64 to store compressed bytes in TEXT column
+                    use base64::Engine;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&encoded);
+                    (b64, true)
+                } else {
+                    (msg.body.clone(), false)
+                };
+
                 // Insert message
                 tx.execute(
-                    "INSERT INTO messages (id, thread_id, from_account, subject, body, snippet, internal_date, in_reply_to, reply_by, reply_requested, source)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    "INSERT INTO messages (id, thread_id, from_account, subject, body, snippet, internal_date, in_reply_to, reply_by, reply_requested, source, compressed)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     rusqlite::params![
-                        msg_id, thread_id, msg.from_account, msg.subject, msg.body,
-                        snippet, now, msg.in_reply_to, msg.reply_by, reply_requested, msg.source,
+                        msg_id, thread_id, msg.from_account, msg.subject, stored_body,
+                        snippet, now, msg.in_reply_to, msg.reply_by, reply_requested, msg.source, compressed,
                     ],
                 )?;
 
@@ -309,16 +321,18 @@ impl DataStore for SqliteDataStore {
         self.db
             .call(move |conn| {
                 let msg = conn.query_row(
-                    "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source
+                    "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source, compressed
                      FROM messages WHERE id = ?1",
                     rusqlite::params![id],
                     |row| {
+                        let stored_body: String = row.get(4)?;
+                        let compressed: bool = row.get::<_, i32>(12)? != 0;
                         Ok(Message {
                             id: row.get(0)?,
                             thread_id: row.get(1)?,
                             from_account: row.get(2)?,
                             subject: row.get(3)?,
-                            body: row.get(4)?,
+                            body: decompress_body(&stored_body, compressed),
                             snippet: row.get(5)?,
                             has_attachments: row.get::<_, i32>(6)? != 0,
                             internal_date: row.get(7)?,
@@ -382,7 +396,7 @@ impl DataStore for SqliteDataStore {
         self.db
             .call(move |conn| {
                 let mut query = String::from(
-                    "SELECT m.id, m.thread_id, m.from_account, m.subject, m.body, m.snippet, m.has_attachments, m.internal_date, m.in_reply_to, m.reply_by, m.reply_requested, m.source
+                    "SELECT m.id, m.thread_id, m.from_account, m.subject, m.body, m.snippet, m.has_attachments, m.internal_date, m.in_reply_to, m.reply_by, m.reply_requested, m.source, m.compressed
                      FROM messages m
                      JOIN message_labels ml ON m.id = ml.message_id
                      WHERE ml.account_id = ?1 AND ml.label = ?2"
@@ -406,12 +420,14 @@ impl DataStore for SqliteDataStore {
                 let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
                 let mut messages: Vec<Message> = stmt
                     .query_map(param_refs.as_slice(), |row| {
+                        let stored_body: String = row.get(4)?;
+                        let compressed: bool = row.get::<_, i32>(12)? != 0;
                         Ok(Message {
                             id: row.get(0)?,
                             thread_id: row.get(1)?,
                             from_account: row.get(2)?,
                             subject: row.get(3)?,
-                            body: row.get(4)?,
+                            body: decompress_body(&stored_body, compressed),
                             snippet: row.get(5)?,
                             has_attachments: row.get::<_, i32>(6)? != 0,
                             internal_date: row.get(7)?,
@@ -861,17 +877,19 @@ impl DataStore for SqliteDataStore {
 
                 // Load messages in thread
                 let mut stmt = conn.prepare(
-                    "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source
+                    "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source, compressed
                      FROM messages WHERE thread_id = ?1 ORDER BY internal_date ASC"
                 )?;
                 let messages: Vec<Message> = stmt
                     .query_map(rusqlite::params![thread.id], |row| {
+                        let stored_body: String = row.get(4)?;
+                        let compressed: bool = row.get::<_, i32>(12)? != 0;
                         Ok(Message {
                             id: row.get(0)?,
                             thread_id: row.get(1)?,
                             from_account: row.get(2)?,
                             subject: row.get(3)?,
-                            body: row.get(4)?,
+                            body: decompress_body(&stored_body, compressed),
                             snippet: row.get(5)?,
                             has_attachments: row.get::<_, i32>(6)? != 0,
                             internal_date: row.get(7)?,
@@ -1024,6 +1042,21 @@ fn row_to_account(row: &rusqlite::Row) -> rusqlite::Result<Account> {
         active: row.get::<_, i32>(5)? != 0,
         created_at: row.get(6)?,
     })
+}
+
+fn decompress_body(stored_body: &str, compressed: bool) -> String {
+    if !compressed {
+        return stored_body.to_string();
+    }
+    use base64::Engine;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(stored_body) {
+        Ok(b) => b,
+        Err(_) => return stored_body.to_string(),
+    };
+    match zstd::decode_all(bytes.as_slice()) {
+        Ok(decoded) => String::from_utf8(decoded).unwrap_or_else(|_| stored_body.to_string()),
+        Err(_) => stored_body.to_string(),
+    }
 }
 
 fn make_snippet(body: &str) -> String {
@@ -1358,5 +1391,51 @@ mod tests {
         let pending = store.get_pending_replies(&recipient.id).await.unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].subject, "Need reply");
+    }
+
+    #[tokio::test]
+    async fn test_body_compression() {
+        let store = test_store().await;
+        let sender = store.create_account("sender", None).await.unwrap();
+        let recipient = store.create_account("recipient", None).await.unwrap();
+
+        // Create a body > 512 bytes that should be compressed
+        let large_body = "x".repeat(1000);
+        let msg = NewMessage {
+            from_account: sender.id.clone(),
+            to: vec![recipient.id.clone()],
+            cc: vec![],
+            subject: "Large body".to_string(),
+            body: large_body.clone(),
+            thread_id: None,
+            in_reply_to: None,
+            reply_by: None,
+            labels: vec![],
+            source: None, attachments: vec![],
+        };
+
+        let sent = store.insert_message(msg).await.unwrap();
+
+        // Retrieve and verify body is decompressed correctly
+        let fetched = store.get_message(&sent.id).await.unwrap();
+        assert_eq!(fetched.body, large_body);
+        assert_eq!(fetched.body.len(), 1000);
+
+        // Verify the stored body in DB is actually compressed (smaller than original)
+        let db = store.db.clone();
+        let msg_id = sent.id.clone();
+        let (stored_body, compressed): (String, bool) = db
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT body, compressed FROM messages WHERE id = ?1",
+                    rusqlite::params![msg_id],
+                    |row| Ok((row.get(0)?, row.get::<_, i32>(1)? != 0)),
+                )
+                .map_err(|e| tokio_rusqlite::Error::Rusqlite(e))
+            })
+            .await
+            .unwrap();
+        assert!(compressed, "body should be marked as compressed");
+        assert!(stored_body.len() < large_body.len(), "stored body should be smaller than original");
     }
 }
