@@ -1342,3 +1342,195 @@ async fn test_mailing_list_fanout() {
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(sub3_inbox["messages"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn test_send_to_nonexistent_list_rejected() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = alice["bearerToken"].as_str().unwrap();
+
+    // Sending to "list:nonexistent" — list doesn't exist, recipient passed through
+    // as literal "list:nonexistent" which isn't a valid account ID → FK error
+    let resp = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(token)
+        .json(&json!({
+            "to": ["list:nonexistent"],
+            "subject": "test",
+            "body": "hello"
+        }))
+        .send().await.unwrap();
+    assert!(resp.status().is_server_error() || resp.status().is_client_error());
+}
+
+#[tokio::test]
+async fn test_thread_reply_chain() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let bob: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+    let bob_token = bob["bearerToken"].as_str().unwrap();
+    let alice_id = alice["id"].as_str().unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+
+    // Alice sends original
+    let msg1: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(alice_token)
+        .json(&json!({
+            "to": [bob_id],
+            "subject": "Hello Bob",
+            "body": "How are you?"
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    let msg1_id = msg1["id"].as_str().unwrap();
+    let thread_id = msg1["threadId"].as_str().unwrap();
+
+    // Bob replies using in_reply_to
+    let msg2: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(bob_token)
+        .json(&json!({
+            "to": [alice_id],
+            "subject": "Re: Hello Bob",
+            "body": "I'm great!",
+            "in_reply_to": msg1_id
+        }))
+        .send().await.unwrap().json().await.unwrap();
+
+    // Both should be in same thread
+    assert_eq!(msg2["threadId"].as_str().unwrap(), thread_id);
+
+    // Thread endpoint should return both messages
+    let thread: Value = client
+        .get(format!("{base}/api/threads/{thread_id}"))
+        .bearer_auth(alice_token)
+        .send().await.unwrap().json().await.unwrap();
+    let msgs = thread["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 2);
+}
+
+#[tokio::test]
+async fn test_diagnostics_unread_count() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let bob: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+    let bob_token = bob["bearerToken"].as_str().unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+
+    // Send 3 messages to Bob
+    for i in 0..3 {
+        client
+            .post(format!("{base}/api/messages/send"))
+            .bearer_auth(alice_token)
+            .json(&json!({
+                "to": [bob_id],
+                "subject": format!("msg {i}"),
+                "body": "hello"
+            }))
+            .send().await.unwrap();
+    }
+
+    // Bob's diagnostics should show 3 unread
+    let inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(bob_token)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(inbox["_diagnostics"]["unread_count"], 3);
+
+    // Read one message (GET auto-removes UNREAD)
+    let msg_id = inbox["messages"][0]["id"].as_str().unwrap();
+    client
+        .get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(bob_token)
+        .send().await.unwrap();
+
+    // Diagnostics should now show 2 unread
+    let inbox2: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(bob_token)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(inbox2["_diagnostics"]["unread_count"], 2);
+}
+
+#[tokio::test]
+async fn test_body_compression_roundtrip() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let bob: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+    let bob_token = bob["bearerToken"].as_str().unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+
+    // Create a body > 512 bytes to trigger compression
+    let long_body = "A".repeat(1000);
+
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(alice_token)
+        .json(&json!({
+            "to": [bob_id],
+            "subject": "Long message",
+            "body": long_body
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Retrieve and verify body is decompressed correctly
+    let msg: Value = client
+        .get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(bob_token)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(msg["body"].as_str().unwrap(), long_body);
+}
+
+#[tokio::test]
+async fn test_empty_recipients_rejected() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = alice["bearerToken"].as_str().unwrap();
+
+    let resp = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(token)
+        .json(&json!({
+            "to": [],
+            "subject": "test",
+            "body": "hello"
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+}
