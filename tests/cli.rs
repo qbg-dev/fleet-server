@@ -51,6 +51,8 @@ fn test_cli_status() {
     let output = Command::new(env!("CARGO_BIN_EXE_boring-mail"))
         .arg("status")
         .env("BORING_MAIL_DATA_DIR", tmp.path().to_str().unwrap())
+        // Use a port unlikely to be in use so status reports "not running"
+        .env("BORING_MAIL_BIND", "127.0.0.1:19999")
         .output()
         .unwrap();
     assert!(output.status.success());

@@ -78,23 +78,23 @@ pub async fn rate_limit_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "));
 
-    if let Some(token) = token {
-        if let Err(retry_after) = limiter.check(token) {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(header::RETRY_AFTER, retry_after.to_string())],
-                axum::Json(serde_json::json!({
-                    "error": {
-                        "code": 429,
-                        "message": "rate limit exceeded",
-                        "details": format!(
-                            "too many requests, retry after {retry_after}s"
-                        ),
-                    }
-                })),
-            )
-                .into_response();
-        }
+    if let Some(token) = token
+        && let Err(retry_after) = limiter.check(token)
+    {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after.to_string())],
+            axum::Json(serde_json::json!({
+                "error": {
+                    "code": 429,
+                    "message": "rate limit exceeded",
+                    "details": format!(
+                        "too many requests, retry after {retry_after}s"
+                    ),
+                }
+            })),
+        )
+            .into_response();
     }
 
     next.run(request).await
