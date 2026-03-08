@@ -31,15 +31,25 @@ pub async fn create_list(
     })))
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct SubscribeRequest {
+    /// Account to subscribe. Defaults to the authenticated caller.
+    pub account_id: Option<String>,
+}
+
 /// POST /api/lists/:id/subscribe
 pub async fn subscribe(
     auth: AuthAccount,
     State(state): State<AppState>,
     Path(id): Path<String>,
+    body: Option<Json<SubscribeRequest>>,
 ) -> Result<Json<Value>, ApiError> {
+    let target = body
+        .and_then(|Json(r)| r.account_id)
+        .unwrap_or_else(|| auth.0.id.clone());
     state
         .store
-        .subscribe_to_list(&id, &auth.0.id)
+        .subscribe_to_list(&id, &target)
         .await
         .map_err(ApiError::from)?;
 

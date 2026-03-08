@@ -1263,3 +1263,82 @@ async fn test_update_pane() {
     let body2: Value = resp2.json().await.unwrap();
     assert_eq!(body2["tmuxPaneId"], "%99");
 }
+
+#[tokio::test]
+async fn test_mailing_list_fanout() {
+    let (base, client) = spawn_server().await;
+
+    // Create sender and 3 subscribers
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let sub1: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sub1"}))
+        .send().await.unwrap().json().await.unwrap();
+    let sub2: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sub2"}))
+        .send().await.unwrap().json().await.unwrap();
+    let sub3: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sub3"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let sub1_token = sub1["bearerToken"].as_str().unwrap();
+    let sub2_token = sub2["bearerToken"].as_str().unwrap();
+    let sub3_token = sub3["bearerToken"].as_str().unwrap();
+
+    // Create a mailing list and subscribe sub1 + sub2 (not sub3)
+    let list: Value = client
+        .post(format!("{base}/api/lists"))
+        .bearer_auth(sender_token)
+        .json(&json!({"name": "team-updates", "description": "Team updates"}))
+        .send().await.unwrap().json().await.unwrap();
+    let list_id = list["id"].as_str().unwrap();
+
+    client.post(format!("{base}/api/lists/{list_id}/subscribe"))
+        .bearer_auth(sender_token)
+        .json(&json!({"account_id": sub1["id"].as_str().unwrap()}))
+        .send().await.unwrap();
+    client.post(format!("{base}/api/lists/{list_id}/subscribe"))
+        .bearer_auth(sender_token)
+        .json(&json!({"account_id": sub2["id"].as_str().unwrap()}))
+        .send().await.unwrap();
+
+    // Send message to the list
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": ["list:team-updates"],
+            "subject": "Team announcement",
+            "body": "Hello everyone"
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(sent["id"].is_string());
+
+    // sub1 should have the message in INBOX
+    let sub1_inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(sub1_token)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(sub1_inbox["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(sub1_inbox["messages"][0]["subject"], "Team announcement");
+
+    // sub2 should have it too
+    let sub2_inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(sub2_token)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(sub2_inbox["messages"].as_array().unwrap().len(), 1);
+
+    // sub3 should NOT have it (not subscribed)
+    let sub3_inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(sub3_token)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(sub3_inbox["messages"].as_array().unwrap().len(), 0);
+}
