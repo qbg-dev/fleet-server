@@ -1994,3 +1994,186 @@ async fn test_health_includes_version() {
     assert_eq!(resp["service"], "boring-mail");
     assert!(resp["version"].is_string(), "health should include version");
 }
+
+/// When exactly maxResults messages exist, no nextPageToken should be returned.
+#[tokio::test]
+async fn test_pagination_exactly_at_limit() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Send exactly 3 messages
+    for i in 0..3 {
+        client
+            .post(format!("{base}/api/messages/send"))
+            .bearer_auth(sender_token)
+            .json(&json!({
+                "to": [recipient_id],
+                "subject": format!("Exact limit test {i}"),
+                "body": format!("Body {i}")
+            }))
+            .send().await.unwrap();
+    }
+
+    // Request with maxResults=3 — should get all 3, no next page
+    let resp: Value = client
+        .get(format!("{base}/api/messages?label=INBOX&maxResults=3"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(resp["messages"].as_array().unwrap().len(), 3);
+    assert!(resp["nextPageToken"].is_null(), "no next page when exactly at limit");
+    assert_eq!(resp["resultSizeEstimate"], 3);
+}
+
+/// When maxResults+1 messages exist, nextPageToken should be returned with exactly maxResults items.
+#[tokio::test]
+async fn test_pagination_one_over_limit() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Send exactly 4 messages with small delays to ensure distinct timestamps
+    for i in 0..4 {
+        client
+            .post(format!("{base}/api/messages/send"))
+            .bearer_auth(sender_token)
+            .json(&json!({
+                "to": [recipient_id],
+                "subject": format!("Over limit test {i}"),
+                "body": format!("Body {i}")
+            }))
+            .send().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    // Request with maxResults=3 — should get 3 items with a nextPageToken
+    let resp: Value = client
+        .get(format!("{base}/api/messages?label=INBOX&maxResults=3"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(resp["messages"].as_array().unwrap().len(), 3);
+    assert!(resp["nextPageToken"].is_string(), "should have nextPageToken when over limit");
+    assert_eq!(resp["resultSizeEstimate"], 3);
+
+    // Follow the pagination to get the last message
+    let token = resp["nextPageToken"].as_str().unwrap();
+    let page2: Value = client
+        .get(format!("{base}/api/messages?label=INBOX&maxResults=3&pageToken={token}"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(page2["messages"].as_array().unwrap().len(), 1);
+    assert!(page2["nextPageToken"].is_null(), "last page should have no token");
+}
+
+/// Single message: maxResults=1 should return it with no next page.
+#[tokio::test]
+async fn test_pagination_single_message() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Solo message",
+            "body": "Only one"
+        }))
+        .send().await.unwrap();
+
+    let resp: Value = client
+        .get(format!("{base}/api/messages?label=INBOX&maxResults=1"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(resp["messages"].as_array().unwrap().len(), 1);
+    assert!(resp["nextPageToken"].is_null());
+    assert_eq!(resp["resultSizeEstimate"], 1);
+}
+
+/// Thread pagination: verify boundary behavior matches message pagination.
+#[tokio::test]
+async fn test_thread_pagination_boundary() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Send 3 messages (each creates a new thread since no in_reply_to)
+    for i in 0..3 {
+        client
+            .post(format!("{base}/api/messages/send"))
+            .bearer_auth(sender_token)
+            .json(&json!({
+                "to": [recipient_id],
+                "subject": format!("Thread pagination {i}"),
+                "body": format!("Body {i}")
+            }))
+            .send().await.unwrap();
+    }
+
+    // Exactly at limit — no next page
+    let resp: Value = client
+        .get(format!("{base}/api/threads?label=INBOX&maxResults=3"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(resp["threads"].as_array().unwrap().len(), 3);
+    assert!(resp["nextPageToken"].is_null());
+
+    // Under limit — should still paginate correctly
+    let resp: Value = client
+        .get(format!("{base}/api/threads?label=INBOX&maxResults=2"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(resp["threads"].as_array().unwrap().len(), 2);
+    assert!(resp["nextPageToken"].is_string(), "should paginate threads");
+}

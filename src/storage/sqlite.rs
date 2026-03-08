@@ -306,7 +306,7 @@ impl DataStore for SqliteDataStore {
                 ];
 
                 if let Some(ref token) = page_token {
-                    query.push_str(" AND m.internal_date < ?3");
+                    query.push_str(" AND m.internal_date <= ?3");
                     params.push(Box::new(token.clone()));
                 }
 
@@ -830,7 +830,7 @@ impl DataStore for SqliteDataStore {
                 ];
 
                 if let Some(ref token) = page_token {
-                    query.push_str(" AND t.last_message_at < ?3");
+                    query.push_str(" AND t.last_message_at <= ?3");
                     params.push(Box::new(token.clone()));
                 }
 
@@ -1188,17 +1188,21 @@ fn update_thread_metadata(
     Ok(())
 }
 
-/// Trim results to max_results, returning a page token from the extra item if present.
-/// Eliminates `.pop().unwrap()` by using `if let` on the popped item.
+/// Trim results to max_results, returning a page token from the extra item.
+/// The token is the cursor value of the extra (max_results+1th) item, used with
+/// `<= token` to ensure it appears on the next page.
 fn paginate_results<T, F: FnOnce(&T) -> String>(
     items: &mut Vec<T>,
     max_results: u32,
     token_fn: F,
 ) -> Option<String> {
-    if items.len() > max_results as usize && let Some(last) = items.pop() {
-        return Some(token_fn(&last));
+    if items.len() > max_results as usize {
+        let token = items.last().map(token_fn);
+        items.truncate(max_results as usize);
+        token
+    } else {
+        None
     }
-    None
 }
 
 /// Link blob attachments to a message and set has_attachments flag.
@@ -1764,5 +1768,38 @@ mod tests {
             prop_assert!(snippet.ends_with("..."));
             prop_assert_eq!(snippet.chars().count(), 203);
         }
+    }
+
+    #[test]
+    fn test_paginate_empty_vec() {
+        let mut items: Vec<String> = vec![];
+        let token = paginate_results(&mut items, 10, |s| s.clone());
+        assert!(token.is_none());
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_paginate_under_limit() {
+        let mut items = vec!["a".to_string(), "b".to_string()];
+        let token = paginate_results(&mut items, 5, |s| s.clone());
+        assert!(token.is_none());
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn test_paginate_exactly_at_limit() {
+        let mut items = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let token = paginate_results(&mut items, 3, |s| s.clone());
+        assert!(token.is_none());
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn test_paginate_one_over_limit() {
+        let mut items = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let token = paginate_results(&mut items, 3, |s| s.clone());
+        // Token is from the extra (4th) item before truncation
+        assert_eq!(token, Some("d".to_string()));
+        assert_eq!(items, vec!["a", "b", "c"]);
     }
 }
