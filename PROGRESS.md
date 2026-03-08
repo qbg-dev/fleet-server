@@ -31,8 +31,8 @@
 | POST | /api/lists/:id/unsubscribe | Unsubscribe |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 103 tests, all passing
-- 33 unit tests (storage, search, parser, filter, blob, tmux)
+## Test Summary: 105 tests, all passing
+- 34 unit tests (storage, search, parser, filter, blob, tmux)
 - 28 integration tests (HTTP API + conformance + edge cases)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -115,8 +115,18 @@
   - search: ~1.1ms, list_labels: ~590µs
 - 103 tests (33 unit + 28 integration + 8 MCP + 1 bench)
 
+### Cycle 7 — CLI subcommands (2026-03-08)
+- clap-based CLI: `serve` (default), `init`, `status`, `accounts`
+- `init`: creates data dir + DB, prints paths
+- `status`: shows DB stats (accounts/messages/threads), blob dir, server health check
+- `accounts`: lists all registered accounts in table format
+- Added `list_accounts` to DataStore trait
+- Added `default-run = "boring-mail"` to Cargo.toml
+- 105 tests (34 unit + 28 integration + 8 MCP + 1 bench)
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
 - [x] Background OVERDUE labeling (already implemented in Cycle 2-3)
 - [x] Mailing list fan-out on send
+- [x] CLI subcommands (serve, init, status, accounts)
