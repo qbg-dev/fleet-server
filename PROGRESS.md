@@ -32,8 +32,8 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 124 tests, all passing
-- 35 unit tests (storage, search, parser, filter, blob, tmux, analytics)
+## Test Summary: 140 tests, all passing
+- 51 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based)
 - 41 integration tests (HTTP API + conformance + edge cases + analytics + hardening)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
@@ -155,6 +155,17 @@
 - Zero clippy warnings, zero rustdoc warnings
 - 124 tests still passing
 
+### Cycle 11 — Property-based tests + Unicode bug fix (2026-03-08)
+- Added proptest dependency for property-based testing
+- 16 new property-based tests across 3 modules:
+  - Query parser (6): parse never panics, whitespace→empty, operator extraction, label uppercasing, fts_query consistency
+  - Body compression (3): compress→decompress roundtrip, short bodies uncompressed, long bodies compressed
+  - Snippet (3): char count bounded, short body preservation, long body ellipsis
+  - Blob store (4): store→get roundtrip, deterministic hash, different data→different hash, meta size matches
+- **Bug found by proptest**: `make_snippet` used `body.len()` (byte count) instead of `body.chars().count()` for truncation check—multi-byte Unicode chars caused incorrect truncation/preservation behavior
+- 140 tests (51 unit + 41 integration + 8 MCP + 4 CLI + 1 bench)
+- Zero clippy warnings
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
@@ -164,3 +175,4 @@
 - [x] Refactoring: insert_message decomposition (187→70 lines)
 - [x] Analytics endpoint (per-account + system-wide stats)
 - [x] Documentation: README, rustdoc on core public types
+- [x] Property-based tests (proptest: parser, compression, blob, snippet)
