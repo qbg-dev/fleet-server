@@ -1,6 +1,6 @@
 use axum::{extract::{Path, State}, Json};
 use crate::api::auth::{AppState, AuthAccount};
-use crate::api::models::CreateAccountRequest;
+use crate::api::models::{CreateAccountRequest, UpdatePaneRequest};
 use crate::error::ApiError;
 use crate::storage::DataStore;
 use serde_json::{json, Value};
@@ -63,6 +63,27 @@ pub async fn pending(
         "unanswered_requests": unanswered,
         "ready_to_recycle": ready,
         "blockers": blockers,
+    })))
+}
+
+/// POST /api/accounts/:id/pane — register tmux pane for notifications
+pub async fn update_pane(
+    auth: AuthAccount,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdatePaneRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let id = if id == "me" { auth.0.id.clone() } else { id };
+
+    state
+        .store
+        .update_pane(&id, &req.pane_id)
+        .await
+        .map_err(ApiError::from)?;
+
+    Ok(Json(json!({
+        "id": id,
+        "tmuxPaneId": req.pane_id,
     })))
 }
 

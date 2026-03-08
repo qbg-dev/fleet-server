@@ -55,6 +55,11 @@ fn default_max_results() -> u32 {
     20
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdatePaneRequest {
+    pub pane_id: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Diagnostics {
     pub unread_count: u32,

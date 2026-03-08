@@ -32,6 +32,7 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         // Accounts (create is unauthenticated)
         .route("/api/accounts", post(accounts::create_account))
         .route("/api/accounts/{id}", get(accounts::get_account))
+        .route("/api/accounts/{id}/pane", post(accounts::update_pane))
         .route("/api/accounts/{id}/pending", get(accounts::pending))
         // Messages
         .route("/api/messages/send", post(messages::send_message))

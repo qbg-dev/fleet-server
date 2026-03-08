@@ -1,6 +1,7 @@
 use axum::{extract::{Path, Query, State}, Json};
 use crate::api::auth::{AppState, AuthAccount};
 use crate::api::models::{BatchModifyRequest, ListQuery, ModifyLabelsRequest, SendMessageRequest};
+use crate::delivery::tmux;
 use crate::error::ApiError;
 use crate::storage::models::NewMessage;
 use crate::storage::DataStore;
@@ -15,6 +16,11 @@ pub async fn send_message(
     if req.to.is_empty() {
         return Err(ApiError::BadRequest("empty recipients".into()));
     }
+
+    // Capture for notification before moving into NewMessage
+    let notify_recipients_list = req.to.clone();
+    let notify_subject = req.subject.clone();
+    let notify_from = auth.0.name.clone();
 
     let msg = NewMessage {
         from_account: auth.0.id,
@@ -31,6 +37,12 @@ pub async fn send_message(
     };
 
     let sent = state.store.insert_message(msg).await.map_err(ApiError::from)?;
+
+    // Fire-and-forget tmux notifications to recipients
+    let store = state.store.clone();
+    tokio::spawn(async move {
+        notify_recipients(&store, &notify_recipients_list, &notify_from, &notify_subject).await;
+    });
 
     Ok(Json(json!({
         "id": sent.id,
@@ -215,4 +227,23 @@ pub async fn delete_message(
 ) -> Result<Json<Value>, ApiError> {
     state.store.delete_message(&id).await.map_err(ApiError::from)?;
     Ok(Json(json!({"deleted": true})))
+}
+
+/// Look up each recipient's tmux pane and send a notification.
+async fn notify_recipients(
+    store: &crate::storage::sqlite::SqliteDataStore,
+    recipients: &[String],
+    from: &str,
+    subject: &str,
+) {
+    for recipient_id in recipients {
+        let account = match store.get_account_by_name(recipient_id).await {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+
+        if let Some(ref pane_id) = account.tmux_pane_id {
+            tmux::notify_new_messages(pane_id, 1, from, subject);
+        }
+    }
 }

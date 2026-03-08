@@ -825,3 +825,182 @@ async fn test_send_message_with_attachments() {
     assert_eq!(attachments.len(), 1);
     assert_eq!(attachments[0]["blobHash"], blob_hash);
 }
+
+/// Conformance test: verify API response shapes match Gmail-like conventions
+#[tokio::test]
+async fn test_conformance_response_shapes() {
+    let (base, client) = spawn_server().await;
+
+    // Register accounts
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender", "display_name": "Sender Agent"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Verify account response shape
+    assert!(sender["id"].is_string());
+    assert_eq!(sender["name"], "sender");
+    assert_eq!(sender["displayName"], "Sender Agent");
+    assert!(sender["bearerToken"].is_string());
+
+    // Send message
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Conformance test",
+            "body": "Testing response shapes"
+        }))
+        .send().await.unwrap().json().await.unwrap();
+
+    // Send response shape: id, threadId, labelIds
+    assert!(sent["id"].is_string());
+    assert!(sent["threadId"].is_string());
+    assert!(sent["labelIds"].is_array());
+
+    let msg_id = sent["id"].as_str().unwrap();
+    let thread_id = sent["threadId"].as_str().unwrap();
+
+    // GET message shape
+    let msg: Value = client
+        .get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(msg["id"], msg_id);
+    assert_eq!(msg["threadId"], thread_id);
+    assert!(msg["from"].is_string());
+    assert!(msg["to"].is_array());
+    assert!(msg["cc"].is_array());
+    assert!(msg["subject"].is_string());
+    assert!(msg["body"].is_string());
+    assert!(msg["snippet"].is_string());
+    assert!(msg["labelIds"].is_array());
+    assert!(msg["internalDate"].is_string());
+    assert!(msg["hasAttachments"].is_boolean());
+    assert!(msg["attachments"].is_array());
+    // _diagnostics present on authenticated responses
+    assert!(msg["_diagnostics"].is_object());
+    assert!(msg["_diagnostics"]["unread_count"].is_number());
+
+    // LIST messages shape
+    let list: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(list["messages"].is_array());
+    assert!(list["resultSizeEstimate"].is_number());
+    // nextPageToken should be null when no more pages
+    assert!(list["nextPageToken"].is_null());
+    let list_msg = &list["messages"][0];
+    assert!(list_msg["id"].is_string());
+    assert!(list_msg["threadId"].is_string());
+    assert!(list_msg["snippet"].is_string());
+    assert!(list_msg["subject"].is_string());
+
+    // LABELS shape
+    let labels: Value = client
+        .get(format!("{base}/api/labels"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(labels["labels"].is_array());
+    let label = labels["labels"].as_array().unwrap()
+        .iter().find(|l| l["name"] == "INBOX").unwrap();
+    assert!(label["name"].is_string());
+    assert!(label["type"].is_string());
+    assert!(label["messagesTotal"].is_number());
+    assert!(label["messagesUnread"].is_number());
+
+    // THREADS shape
+    let threads: Value = client
+        .get(format!("{base}/api/threads?label=INBOX"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(threads["threads"].is_array());
+    let thread = &threads["threads"][0];
+    assert!(thread["id"].is_string());
+    assert!(thread["subject"].is_string());
+    assert!(thread["snippet"].is_string());
+    assert!(thread["messageCount"].is_number());
+
+    // GET thread shape
+    let thread_detail: Value = client
+        .get(format!("{base}/api/threads/{thread_id}"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(thread_detail["id"].is_string());
+    assert!(thread_detail["messages"].is_array());
+    assert!(thread_detail["messageCount"].is_number());
+
+    // Error response shape (404)
+    let err_resp = client
+        .get(format!("{base}/api/messages/nonexistent"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap();
+    assert_eq!(err_resp.status(), 404);
+    let err: Value = err_resp.json().await.unwrap();
+    assert!(err["error"].is_object());
+    assert!(err["error"]["code"].is_number());
+    assert!(err["error"]["message"].is_string());
+
+    // Auth error shape (401)
+    let unauth_resp = client
+        .get(format!("{base}/api/messages"))
+        .send().await.unwrap();
+    assert_eq!(unauth_resp.status(), 401);
+}
+
+#[tokio::test]
+async fn test_update_pane() {
+    let (base, client) = spawn_server().await;
+
+    // Register account
+    let account: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "pane-agent"}))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    let token = account["bearerToken"].as_str().unwrap();
+    let id = account["id"].as_str().unwrap();
+
+    // Register pane
+    let resp = client
+        .post(format!("{base}/api/accounts/{id}/pane"))
+        .bearer_auth(token)
+        .json(&json!({"pane_id": "%42"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["tmuxPaneId"], "%42");
+
+    // Verify via get account
+    let profile: Value = client
+        .get(format!("{base}/api/accounts/{id}"))
+        .bearer_auth(token)
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_eq!(profile["tmuxPaneId"], "%42");
+
+    // Update pane using "me"
+    let resp2 = client
+        .post(format!("{base}/api/accounts/me/pane"))
+        .bearer_auth(token)
+        .json(&json!({"pane_id": "%99"}))
+        .send().await.unwrap();
+    assert_eq!(resp2.status(), 200);
+    let body2: Value = resp2.json().await.unwrap();
+    assert_eq!(body2["tmuxPaneId"], "%99");
+}
