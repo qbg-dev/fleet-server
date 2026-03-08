@@ -31,9 +31,9 @@
 | POST | /api/lists/:id/unsubscribe | Unsubscribe |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 89 tests, all passing
+## Test Summary: 94 tests, all passing
 - 33 unit tests (storage, search, parser, filter, blob, tmux)
-- 23 integration tests (HTTP API + conformance)
+- 28 integration tests (HTTP API + conformance + edge cases)
 - Duplicated across lib and bin crate targets
 
 ## Release Binary: 5.1MB (stripped, thin LTO)
@@ -92,11 +92,13 @@
 - [x] Compression: zstd on message bodies >512 bytes
 - [x] End-to-end conformance tests (pagination, label CRUD, modify, search shapes)
 
-### Cycle 5 — Mailing list fan-out (2026-03-08)
+### Cycle 5 — Mailing list fan-out + polish (2026-03-08)
 - Mailing list fan-out on send: `list:name` prefix in recipients auto-expands to subscribers
 - Subscribe endpoint accepts optional `account_id` body for admin subscriptions
-- Integration test for full fan-out flow (sender → list → subscribers, non-member exclusion)
-- 89 tests (33 unit + 23 integration)
+- Proper 400 error for nonexistent mailing list recipients (was 500 FK error)
+- Resolved all clippy warnings
+- 5 new edge case tests: thread reply chains, diagnostics unread tracking, body compression roundtrip, empty/nonexistent recipient handling
+- 94 tests (33 unit + 28 integration)
 
 ### Phase 7+: Continuous Polish
 - [ ] MCP stdio wrapper
