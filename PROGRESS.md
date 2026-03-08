@@ -1,14 +1,15 @@
 # PROGRESS
 
-## Current Phase: 6 (Registry Integration + Polish)
+## Current Phase: 7 (Continuous Polish)
 
-## Endpoint Summary (22 endpoints operational)
+## Endpoint Summary (23 endpoints operational)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /health | Health check |
 | POST | /api/accounts | Register account |
 | GET | /api/accounts/:id | Get profile ("me" supported) |
+| POST | /api/accounts/:id/pane | Register tmux pane for notifications |
 | GET | /api/accounts/:id/pending | Recycle readiness check |
 | POST | /api/messages/send | Send message |
 | GET | /api/messages | List by label, paginated |
@@ -30,9 +31,9 @@
 | POST | /api/lists/:id/unsubscribe | Unsubscribe |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 76 tests, all passing
-- 30 unit tests (storage, search, parser, filter, blob)
-- 16 integration tests (HTTP API)
+## Test Summary: 86 tests, all passing
+- 32 unit tests (storage, search, parser, filter, blob, tmux)
+- 22 integration tests (HTTP API + conformance)
 - Duplicated across lib and bin crate targets
 
 ## Release Binary: 5.1MB (stripped, thin LTO)
@@ -64,25 +65,32 @@
 - Auto-provision accounts from worker-fleet registry.json
 - 76 tests (30 unit + 16 integration)
 
+### Cycle 4 — Phase 5-6 finish + conformance (2026-03-08)
+- tmux push notifications: pane registration, alive detection, fire-and-forget on send
+- POST /api/accounts/:id/pane endpoint (23 endpoints total)
+- Microsecond-precision timestamps (fix pagination with rapid sends)
+- 4 new conformance tests: pagination, label CRUD, modify shapes, search shapes
+- 86 tests (32 unit + 22 integration)
+
 ## ROADMAP Status
 
 ### Phase 1: Foundation — COMPLETE ✓
 ### Phase 2: Core Messages — COMPLETE ✓
 ### Phase 3: Threading + Search — COMPLETE ✓
 ### Phase 4: Mailing Lists + Request/Response — COMPLETE ✓
-### Phase 5: Attachments + Push — MOSTLY COMPLETE ✓
+### Phase 5: Attachments + Push — COMPLETE ✓
 - [x] Blob store (SHA-256, zstd >4KB, content-addressed, dedup)
 - [x] Upload blob (POST /api/blobs)
 - [x] Download blob (GET /api/blobs/:hash)
 - [x] Attach blobs to messages on send
-- [ ] tmux push notification (batch, dead pane detection)
+- [x] tmux push notification (pane registration, dead pane detection, fire-and-forget)
 
-### Phase 6: Registry Integration + Polish — MOSTLY COMPLETE ✓
+### Phase 6: Registry Integration + Polish — COMPLETE ✓
 - [x] Recycle readiness endpoint
 - [x] mail-hook.sh script
 - [x] Auto-provision from registry.json
 - [x] Compression: zstd on message bodies >512 bytes
-- [ ] End-to-end conformance tests
+- [x] End-to-end conformance tests (pagination, label CRUD, modify, search shapes)
 
 ### Phase 7+: Continuous Polish
 - [ ] MCP stdio wrapper
