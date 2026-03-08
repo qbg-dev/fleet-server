@@ -440,3 +440,62 @@ async fn test_threads_endpoint() {
     assert_eq!(thread["messageCount"], 2);
     assert_eq!(thread["messages"].as_array().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn test_diagnostics_in_response() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+
+    // Send a message with reply_by
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient["id"].as_str().unwrap()],
+            "subject": "Urgent",
+            "body": "Please respond",
+            "reply_by": "2026-03-09T00:00:00Z"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // Any authenticated request should include _diagnostics
+    let inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let diag = &inbox["_diagnostics"];
+    assert!(diag.is_object(), "_diagnostics missing from response");
+    assert_eq!(diag["unread_count"], 1);
+    assert_eq!(diag["pending_replies"].as_array().unwrap().len(), 1);
+    assert_eq!(diag["pending_replies"][0]["subject"], "Urgent");
+    assert!(diag["inbox_hint"].is_string());
+}

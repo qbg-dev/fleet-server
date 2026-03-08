@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod diagnostics;
 pub mod error;
 pub mod models;
 pub mod accounts;
@@ -6,7 +7,7 @@ pub mod messages;
 pub mod labels;
 pub mod threads;
 
-use axum::{Router, routing::{get, post, delete}};
+use axum::{Router, middleware, routing::{get, post, delete}};
 use crate::db::connection::DbPool;
 use crate::config::Config;
 use crate::storage::sqlite::SqliteDataStore;
@@ -35,6 +36,11 @@ pub fn router(db: DbPool, _config: &Config) -> Router {
         // Threads
         .route("/api/threads", get(threads::list_threads))
         .route("/api/threads/{id}", get(threads::get_thread))
+        // Diagnostics middleware — appends _diagnostics to all JSON responses
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            diagnostics::diagnostics_middleware,
+        ))
         .with_state(state)
 }
 
