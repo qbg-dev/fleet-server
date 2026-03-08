@@ -177,20 +177,7 @@ impl DataStore for SqliteDataStore {
                     rusqlite::params![msg_id],
                 )?;
 
-                // Attach blobs
-                let has_attachments = !msg.attachments.is_empty();
-                for blob_hash in &msg.attachments {
-                    tx.execute(
-                        "INSERT INTO attachments (message_id, blob_hash) VALUES (?1, ?2)",
-                        rusqlite::params![msg_id, blob_hash],
-                    )?;
-                }
-                if has_attachments {
-                    tx.execute(
-                        "UPDATE messages SET has_attachments = 1 WHERE id = ?1",
-                        rusqlite::params![msg_id],
-                    )?;
-                }
+                let has_attachments = attach_blobs(&tx, &msg_id, &msg.attachments)?;
 
                 tx.commit()?;
 
@@ -353,19 +340,14 @@ impl DataStore for SqliteDataStore {
                     .filter_map(|r| r.ok())
                     .collect();
 
-                let next_page_token = if messages.len() > max_results as usize {
-                    let last = messages.pop().unwrap();
-                    Some(last.internal_date)
-                } else {
-                    None
-                };
-
-                let result_size_estimate = messages.len() as u32;
+                let next_page_token = paginate_results(&mut messages, max_results, |m| {
+                    m.internal_date.clone()
+                });
 
                 Ok(MessageList {
+                    result_size_estimate: messages.len() as u32,
                     messages,
                     next_page_token,
-                    result_size_estimate,
                 })
             })
             .await
@@ -875,19 +857,14 @@ impl DataStore for SqliteDataStore {
                     .filter_map(|r| r.ok())
                     .collect();
 
-                let next_page_token = if threads.len() > max_results as usize {
-                    let last = threads.pop().unwrap();
-                    Some(last.last_message_at)
-                } else {
-                    None
-                };
-
-                let result_size_estimate = threads.len() as u32;
+                let next_page_token = paginate_results(&mut threads, max_results, |t| {
+                    t.last_message_at.clone()
+                });
 
                 Ok(ThreadList {
+                    result_size_estimate: threads.len() as u32,
                     threads,
                     next_page_token,
-                    result_size_estimate,
                 })
             })
             .await
@@ -1209,6 +1186,41 @@ fn update_thread_metadata(
         rusqlite::params![snippet, now, participants_json, thread_id],
     )?;
     Ok(())
+}
+
+/// Trim results to max_results, returning a page token from the extra item if present.
+/// Eliminates `.pop().unwrap()` by using `if let` on the popped item.
+fn paginate_results<T, F: FnOnce(&T) -> String>(
+    items: &mut Vec<T>,
+    max_results: u32,
+    token_fn: F,
+) -> Option<String> {
+    if items.len() > max_results as usize && let Some(last) = items.pop() {
+        return Some(token_fn(&last));
+    }
+    None
+}
+
+/// Link blob attachments to a message and set has_attachments flag.
+fn attach_blobs(
+    tx: &rusqlite::Transaction,
+    msg_id: &str,
+    attachments: &[String],
+) -> Result<bool, rusqlite::Error> {
+    let has_attachments = !attachments.is_empty();
+    for blob_hash in attachments {
+        tx.execute(
+            "INSERT INTO attachments (message_id, blob_hash) VALUES (?1, ?2)",
+            rusqlite::params![msg_id, blob_hash],
+        )?;
+    }
+    if has_attachments {
+        tx.execute(
+            "UPDATE messages SET has_attachments = 1 WHERE id = ?1",
+            rusqlite::params![msg_id],
+        )?;
+    }
+    Ok(has_attachments)
 }
 
 fn storage_err_from_tokio(e: tokio_rusqlite::Error) -> StorageError {
