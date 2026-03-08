@@ -26,6 +26,46 @@ pub async fn create_account(
     })))
 }
 
+/// GET /api/accounts/:id/pending — recycle readiness check
+pub async fn pending(
+    auth: AuthAccount,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let id = if id == "me" { auth.0.id.clone() } else { id };
+
+    let pending = state
+        .store
+        .get_pending_replies(&id)
+        .await
+        .map_err(ApiError::from)?;
+
+    let unanswered: Vec<Value> = pending
+        .iter()
+        .map(|p| {
+            json!({
+                "messageId": p.message_id,
+                "from": p.from_account,
+                "subject": p.subject,
+                "replyBy": p.reply_by,
+            })
+        })
+        .collect();
+
+    let ready = unanswered.is_empty();
+    let blockers: Vec<String> = if !ready {
+        vec![format!("{} unanswered reply requests", unanswered.len())]
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "unanswered_requests": unanswered,
+        "ready_to_recycle": ready,
+        "blockers": blockers,
+    })))
+}
+
 /// GET /api/accounts/:id — get account profile
 pub async fn get_account(
     _auth: AuthAccount,
