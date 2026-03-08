@@ -59,6 +59,10 @@ scripts/bms-mail thread <thread-id>                       # get full thread
 scripts/bms-mail search "keyword"                         # FTS search
 scripts/bms-mail labels                                   # list labels with counts
 scripts/bms-mail modify <msg-id> +STARRED -UNREAD         # add/remove labels
+scripts/bms-mail directory                                # list all accounts (name, bio)
+scripts/bms-mail directory "keyword"                      # search accounts by name/bio
+scripts/bms-mail profile                                  # view own profile
+scripts/bms-mail profile --bio "I do web research"        # update bio
 scripts/bms-mail health                                   # server health
 scripts/bms-mail help                                     # full usage
 ```

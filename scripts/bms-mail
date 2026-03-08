@@ -57,6 +57,32 @@ case "${1:-help}" in
     done
     api -X POST "$URL/api/messages/$mid/modify" -d "{\"addLabelIds\":$add,\"removeLabelIds\":$rem}"
     ;;
+  directory|dir)
+    # bms-mail directory [search-query]
+    if [ -n "${2:-}" ]; then
+      api "$URL/api/directory?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$2'))")"
+    else
+      api "$URL/api/directory"
+    fi
+    ;;
+  profile)
+    # bms-mail profile [--bio "text"] [--name "display name"]
+    if [ -z "${2:-}" ]; then
+      api "$URL/api/accounts/me"
+    else
+      body="{"
+      sep=""
+      while [ $# -gt 1 ]; do
+        case "$2" in
+          --bio) body="$body${sep}\"bio\":\"$3\""; sep=","; shift 2 ;;
+          --name) body="$body${sep}\"displayName\":\"$3\""; sep=","; shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      body="$body}"
+      api -X PUT "$URL/api/accounts/me" -d "$body"
+    fi
+    ;;
   health)
     curl -sf "$URL/health"
     ;;
@@ -72,6 +98,10 @@ bms-mail — agent mail CLI
   search <query>                     Search messages
   labels                             List labels with counts
   modify <msg-id> +ADD -REMOVE       Add/remove labels
+  directory [query]                  List accounts (with optional search)
+  profile                            View own profile
+  profile --bio "text"               Update bio
+  profile --name "display name"      Update display name
   health                             Server health check
 
 Env: BMS_URL (default http://127.0.0.1:8025), BMS_TOKEN (required)

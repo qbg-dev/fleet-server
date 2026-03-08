@@ -2,15 +2,18 @@
 
 ## Current Phase: 7 (Continuous Polish)
 
-## Endpoint Summary (24 endpoints operational)
+## Endpoint Summary (27 endpoints operational)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /health | Health check |
-| POST | /api/accounts | Register account |
-| GET | /api/accounts/:id | Get profile ("me" supported) |
+| POST | /api/accounts | Register account (with optional bio) |
+| GET | /api/accounts/me | Get own profile |
+| PUT | /api/accounts/me | Update profile (displayName, bio) |
+| GET | /api/accounts/:id | Get profile (own account only) |
 | POST | /api/accounts/:id/pane | Register tmux pane for notifications |
 | GET | /api/accounts/:id/pending | Recycle readiness check |
+| GET | /api/directory | Discover accounts (with ?q= search) |
 | POST | /api/messages/send | Send message |
 | GET | /api/messages | List by label, paginated |
 | GET | /api/messages/:id | Get (auto-removes UNREAD) |
@@ -32,9 +35,9 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 196 tests, all passing
+## Test Summary: 200 tests, all passing
 - 55 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based, 4 pagination)
-- 73 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination + request-id + coverage + security + rate-limit)
+- 77 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination + request-id + coverage + security + rate-limit + directory)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
