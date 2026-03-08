@@ -1,3 +1,5 @@
+//! HTTP API layer — 24 axum routes with bearer token auth and `_diagnostics` middleware.
+
 pub mod analytics;
 pub mod auth;
 pub mod diagnostics;

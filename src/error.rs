@@ -2,6 +2,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+/// Errors from the storage layer (SQLite, blob I/O).
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("database error: {0}")]
@@ -12,6 +13,7 @@ pub enum StorageError {
     BlobIo(#[from] std::io::Error),
 }
 
+/// Errors from message processing (validation, delivery).
 #[derive(Debug, thiserror::Error)]
 pub enum MessageError {
     #[error("storage: {0}")]
@@ -27,6 +29,9 @@ pub enum MessageError {
     Validation(String),
 }
 
+/// HTTP API errors, each mapping to a specific status code.
+///
+/// Implements [`axum::response::IntoResponse`] to produce JSON error bodies.
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     #[error("unauthorized")]

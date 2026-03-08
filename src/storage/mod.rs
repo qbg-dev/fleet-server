@@ -1,3 +1,12 @@
+//! Storage traits and implementations.
+//!
+//! Three traits define the storage contract:
+//! - [`DataStore`] — accounts, messages, threads, labels, mailing lists, analytics
+//! - [`BlobStore`] — content-addressed blob storage (SHA-256 keys, zstd compression)
+//! - [`SearchStore`] — full-text search indexing and querying (FTS5)
+//!
+//! Implementations: [`sqlite::SqliteDataStore`], [`blob::FsBlobStore`], [`fts::SqliteSearchStore`].
+
 pub mod models;
 pub mod sqlite;
 pub mod blob;
