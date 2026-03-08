@@ -32,9 +32,9 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 165 tests, all passing
+## Test Summary: 196 tests, all passing
 - 55 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based, 4 pagination)
-- 62 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination + request-id + coverage)
+- 73 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination + request-id + coverage + security + rate-limit)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -213,6 +213,23 @@
 - 165 tests (55 unit + 62 integration + 8 MCP + 4 CLI + 1 bench)
 - Zero clippy warnings
 
+### Cycle 17 — Rate limiting + security hardening (2026-03-08)
+- **Rate limiting**: per-account sliding window (DashMap), configurable via `BORING_MAIL_RATE_LIMIT` (req/min, default 60, 0=unlimited)
+- **Security fixes** (found by dogfooding agent fleet):
+  - get_message: 403 for non-participants (IDOR)
+  - delete_message: 403 for non-participants (IDOR)
+  - get_account: block IDOR (only own account)
+  - git-commit webhook: require bearer auth
+  - search handler: propagate errors instead of silently dropping
+- **Bug fixes**: duplicate label → 409, duplicate account → 409
+- **Input validation**: create_account, create_list, create_label (empty, whitespace, length, trimming)
+- Fixed flaky test_cli_status (was detecting running dogfood server)
+- Resolved clippy warning in rate_limit middleware
+- 8 new security integration tests + 3 rate limit tests
+- 196 tests total (55 unit + 73 integration + 8 MCP + 4 CLI + 1 bench)
+- Zero clippy warnings
+- New dependency: dashmap 6
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
@@ -229,3 +246,7 @@
 - [x] Refactoring: row_to_message/row_to_thread/run_paginated_list/query_per_account_stats helpers
 - [x] Request ID: x-request-id UUID v4 header on all responses
 - [x] Coverage tests: CC, UNREAD removal, thread ordering, search, labels, blob dedup
+- [x] Rate limiting: per-account sliding window, DashMap, configurable BORING_MAIL_RATE_LIMIT
+- [x] Security hardening: ownership checks on get/delete message, account IDOR fix, webhook auth
+- [x] Input validation: account/list/label name validation (empty, whitespace, length, trimming)
+- [x] Error hygiene: duplicate label/account → 409 Conflict, search error propagation
