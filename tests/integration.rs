@@ -2209,3 +2209,254 @@ async fn test_request_id_unique_per_request() {
 
     assert_ne!(id1, id2, "each request should get a unique x-request-id");
 }
+
+#[tokio::test]
+async fn test_cc_recipients() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"})).send().await.unwrap().json().await.unwrap();
+    let to_recip: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "to-user"})).send().await.unwrap().json().await.unwrap();
+    let cc_recip: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "cc-user"})).send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let to_id = to_recip["id"].as_str().unwrap();
+    let cc_id = cc_recip["id"].as_str().unwrap();
+    let cc_token = cc_recip["bearerToken"].as_str().unwrap();
+
+    // Send with CC
+    client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({"to": [to_id], "cc": [cc_id], "subject": "CC test", "body": "body"}))
+        .send().await.unwrap();
+
+    // CC recipient should see message in INBOX
+    let inbox: Value = client.get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(cc_token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(inbox["messages"].as_array().unwrap().len(), 1);
+
+    // Get full message and verify CC field
+    let msg_id = inbox["messages"][0]["id"].as_str().unwrap();
+    let msg: Value = client.get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(cc_token).send().await.unwrap().json().await.unwrap();
+    assert!(msg["cc"].as_array().unwrap().iter().any(|v| v == cc_id));
+}
+
+#[tokio::test]
+async fn test_unread_auto_removal_on_get() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"})).send().await.unwrap().json().await.unwrap();
+    let reader: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "reader"})).send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let reader_token = reader["bearerToken"].as_str().unwrap();
+    let reader_id = reader["id"].as_str().unwrap();
+
+    // Send message
+    let sent: Value = client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({"to": [reader_id], "subject": "Read me", "body": "body"}))
+        .send().await.unwrap().json().await.unwrap();
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Before reading: should have UNREAD
+    let labels: Value = client.get(format!("{base}/api/labels"))
+        .bearer_auth(reader_token).send().await.unwrap().json().await.unwrap();
+    let unread_count = labels["labels"].as_array().unwrap()
+        .iter().find(|l| l["name"] == "UNREAD")
+        .map(|l| l["messagesTotal"].as_u64().unwrap()).unwrap_or(0);
+    assert_eq!(unread_count, 1, "should have 1 unread before reading");
+
+    // Read the message
+    client.get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(reader_token).send().await.unwrap();
+
+    // After reading: UNREAD should be gone
+    let labels: Value = client.get(format!("{base}/api/labels"))
+        .bearer_auth(reader_token).send().await.unwrap().json().await.unwrap();
+    let unread_count = labels["labels"].as_array().unwrap()
+        .iter().find(|l| l["name"] == "UNREAD")
+        .map(|l| l["messagesTotal"].as_u64().unwrap()).unwrap_or(0);
+    assert_eq!(unread_count, 0, "UNREAD should be removed after reading");
+}
+
+#[tokio::test]
+async fn test_thread_reply_ordering() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"})).send().await.unwrap().json().await.unwrap();
+    let bob: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"})).send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+    let bob_token = bob["bearerToken"].as_str().unwrap();
+    let alice_id = alice["id"].as_str().unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+
+    // Alice sends original
+    let msg1: Value = client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(alice_token)
+        .json(&json!({"to": [bob_id], "subject": "Thread test", "body": "first"}))
+        .send().await.unwrap().json().await.unwrap();
+    let thread_id = msg1["threadId"].as_str().unwrap();
+    let msg1_id = msg1["id"].as_str().unwrap();
+
+    // Bob replies in same thread
+    let msg2: Value = client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(bob_token)
+        .json(&json!({
+            "to": [alice_id], "subject": "Re: Thread test", "body": "reply",
+            "thread_id": thread_id, "in_reply_to": msg1_id
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(msg2["threadId"].as_str().unwrap(), thread_id, "reply should be in same thread");
+
+    // Get thread — should have 2 messages in chronological order
+    let thread: Value = client.get(format!("{base}/api/threads/{thread_id}"))
+        .bearer_auth(alice_token).send().await.unwrap().json().await.unwrap();
+    let msgs = thread["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0]["body"], "first", "first message should be chronologically first");
+    assert_eq!(msgs[1]["body"], "reply", "reply should be second");
+}
+
+#[tokio::test]
+async fn test_get_nonexistent_thread() {
+    let (base, client) = spawn_server().await;
+
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "user"})).send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp = client.get(format!("{base}/api/threads/nonexistent-thread-id"))
+        .bearer_auth(token).send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_search_no_results() {
+    let (base, client) = spawn_server().await;
+
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "searcher"})).send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp: Value = client.get(format!("{base}/api/search?q=nonexistent_xyzzy_term"))
+        .bearer_auth(token).send().await.unwrap().json().await.unwrap();
+    assert!(resp["messages"].as_array().unwrap().is_empty(), "no results expected");
+    assert_eq!(resp["resultSizeEstimate"], 0);
+}
+
+#[tokio::test]
+async fn test_search_multi_word() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"})).send().await.unwrap().json().await.unwrap();
+    let recip: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recip"})).send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recip_token = recip["bearerToken"].as_str().unwrap();
+    let recip_id = recip["id"].as_str().unwrap();
+
+    // Send two messages with different words
+    client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({"to": [recip_id], "subject": "alpha bravo", "body": "first"}))
+        .send().await.unwrap();
+    client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({"to": [recip_id], "subject": "alpha charlie", "body": "second"}))
+        .send().await.unwrap();
+
+    // Search for "alpha" should find both
+    let resp: Value = client.get(format!("{base}/api/search?q=alpha"))
+        .bearer_auth(recip_token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(resp["messages"].as_array().unwrap().len(), 2);
+
+    // Search for "bravo" should find only one
+    let resp: Value = client.get(format!("{base}/api/search?q=bravo"))
+        .bearer_auth(recip_token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(resp["messages"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_delete_nonexistent_label() {
+    let (base, client) = spawn_server().await;
+
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "user"})).send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    // Delete a label that doesn't exist
+    let resp = client.delete(format!("{base}/api/labels/nonexistent-label"))
+        .bearer_auth(token).send().await.unwrap();
+    // Should succeed silently or return appropriate error
+    assert!(resp.status().is_success() || resp.status() == 404);
+}
+
+#[tokio::test]
+async fn test_modify_add_and_remove_simultaneously() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"})).send().await.unwrap().json().await.unwrap();
+    let recip: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recip"})).send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recip_token = recip["bearerToken"].as_str().unwrap();
+    let recip_id = recip["id"].as_str().unwrap();
+
+    // Send message
+    let sent: Value = client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({"to": [recip_id], "subject": "Modify test", "body": "body"}))
+        .send().await.unwrap().json().await.unwrap();
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Simultaneously add STARRED and remove UNREAD
+    let resp: Value = client.post(format!("{base}/api/messages/{msg_id}/modify"))
+        .bearer_auth(recip_token)
+        .json(&json!({"addLabelIds": ["STARRED"], "removeLabelIds": ["UNREAD"]}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let labels = resp["labelIds"].as_array().unwrap();
+    assert!(labels.iter().any(|l| l == "STARRED"), "STARRED should be added");
+    assert!(!labels.iter().any(|l| l == "UNREAD"), "UNREAD should be removed");
+    assert!(labels.iter().any(|l| l == "INBOX"), "INBOX should still be there");
+}
+
+#[tokio::test]
+async fn test_blob_dedup() {
+    let (base, client) = spawn_server().await;
+
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "uploader"})).send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let data = b"duplicate content for dedup test";
+
+    // Upload same content twice
+    let resp1: Value = client.post(format!("{base}/api/blobs"))
+        .bearer_auth(token)
+        .header("Content-Type", "application/octet-stream")
+        .body(data.to_vec())
+        .send().await.unwrap().json().await.unwrap();
+
+    let resp2: Value = client.post(format!("{base}/api/blobs"))
+        .bearer_auth(token)
+        .header("Content-Type", "application/octet-stream")
+        .body(data.to_vec())
+        .send().await.unwrap().json().await.unwrap();
+
+    // Both should return the same hash (content-addressed)
+    assert_eq!(resp1["hash"], resp2["hash"], "same content should produce same hash");
+}
