@@ -1,1 +1,111 @@
-// Query filter compilation — Phase 3
+use crate::search::parser::{SearchQuery, SearchTerm};
+
+/// Compiled search query ready for SQL execution.
+pub struct CompiledQuery {
+    /// SQL WHERE clause fragments (AND-joined)
+    pub conditions: Vec<String>,
+    /// Bound parameter values in order
+    pub params: Vec<String>,
+    /// FTS5 MATCH query if text search is needed
+    pub fts_match: Option<String>,
+}
+
+impl CompiledQuery {
+    pub fn from_query(query: &SearchQuery, account_id: &str) -> Self {
+        let mut conditions = Vec::new();
+        let mut params = Vec::new();
+        let mut param_idx = 1;
+
+        // Always scope to account
+        conditions.push(format!(
+            "EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.account_id = ?{param_idx})"
+        ));
+        params.push(account_id.to_string());
+        param_idx += 1;
+
+        for term in &query.terms {
+            match term {
+                SearchTerm::From(name) => {
+                    conditions.push(format!(
+                        "EXISTS (SELECT 1 FROM accounts a WHERE a.id = m.from_account AND a.name = ?{param_idx})"
+                    ));
+                    params.push(name.clone());
+                    param_idx += 1;
+                }
+                SearchTerm::To(name) => {
+                    conditions.push(format!(
+                        "EXISTS (SELECT 1 FROM message_recipients mr JOIN accounts a ON a.id = mr.account_id WHERE mr.message_id = m.id AND a.name = ?{param_idx})"
+                    ));
+                    params.push(name.clone());
+                    param_idx += 1;
+                }
+                SearchTerm::Label(label) => {
+                    conditions.push(format!(
+                        "EXISTS (SELECT 1 FROM message_labels ml2 WHERE ml2.message_id = m.id AND ml2.account_id = ?1 AND ml2.label = ?{param_idx})"
+                    ));
+                    params.push(label.clone());
+                    param_idx += 1;
+                }
+                SearchTerm::HasAttachment => {
+                    conditions.push("m.has_attachments = 1".to_string());
+                }
+                SearchTerm::Before(date) => {
+                    conditions.push(format!("m.internal_date < ?{param_idx}"));
+                    params.push(date.clone());
+                    param_idx += 1;
+                }
+                SearchTerm::After(date) => {
+                    conditions.push(format!("m.internal_date > ?{param_idx}"));
+                    params.push(date.clone());
+                    param_idx += 1;
+                }
+                SearchTerm::Text(_) => {
+                    // Handled via FTS5 join
+                }
+            }
+        }
+
+        let fts_match = query.fts_query();
+
+        CompiledQuery {
+            conditions,
+            params,
+            fts_match,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::parser::SearchQuery;
+
+    #[test]
+    fn test_compile_basic() {
+        let q = SearchQuery::parse("from:agent-1 deploy");
+        let compiled = CompiledQuery::from_query(&q, "account-123");
+
+        assert_eq!(compiled.params[0], "account-123");
+        assert_eq!(compiled.params[1], "agent-1");
+        assert_eq!(compiled.fts_match, Some("deploy".into()));
+        assert!(compiled.conditions.len() >= 2);
+    }
+
+    #[test]
+    fn test_compile_label_filter() {
+        let q = SearchQuery::parse("label:STARRED");
+        let compiled = CompiledQuery::from_query(&q, "account-123");
+
+        assert!(compiled.conditions.iter().any(|c| c.contains("ml2.label")));
+        assert_eq!(compiled.params[1], "STARRED");
+    }
+
+    #[test]
+    fn test_compile_date_range() {
+        let q = SearchQuery::parse("after:2026-03-01 before:2026-03-08");
+        let compiled = CompiledQuery::from_query(&q, "acc");
+
+        assert!(compiled.conditions.iter().any(|c| c.contains("internal_date >")));
+        assert!(compiled.conditions.iter().any(|c| c.contains("internal_date <")));
+    }
+}
