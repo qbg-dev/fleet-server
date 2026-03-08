@@ -32,9 +32,9 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 156 tests, all passing
+## Test Summary: 165 tests, all passing
 - 55 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based, 4 pagination)
-- 53 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination boundaries + request-id)
+- 62 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination + request-id + coverage)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -205,6 +205,14 @@
 - 156 tests (55 unit + 53 integration + 8 MCP + 4 CLI + 1 bench)
 - Zero clippy warnings
 
+### Cycle 16 — Coverage tests + refactoring (2026-03-08)
+- 9 new integration tests covering previously untested scenarios:
+  - CC recipients, UNREAD auto-removal on read, thread reply ordering
+  - Nonexistent thread 404, search empty/multi-word results
+  - Delete nonexistent label, simultaneous add+remove modify, blob dedup
+- 165 tests (55 unit + 62 integration + 8 MCP + 4 CLI + 1 bench)
+- Zero clippy warnings
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
@@ -220,3 +228,4 @@
 - [x] Pagination boundary fix + tests
 - [x] Refactoring: row_to_message/row_to_thread/run_paginated_list/query_per_account_stats helpers
 - [x] Request ID: x-request-id UUID v4 header on all responses
+- [x] Coverage tests: CC, UNREAD removal, thread ordering, search, labels, blob dedup
