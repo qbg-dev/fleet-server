@@ -1,0 +1,442 @@
+use reqwest::Client;
+use serde_json::{json, Value};
+use std::net::TcpListener;
+async fn spawn_server() -> (String, Client) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    let config = boring_mail::config::Config {
+        bind_addr: format!("127.0.0.1:{port}"),
+        db_path: data_dir.join("mail.db"),
+        blob_dir: data_dir.join("blobs"),
+        data_dir,
+        admin_token: None,
+    };
+
+    let db = boring_mail::db::connection::setup(&config).await.unwrap();
+    let app = boring_mail::api::router(db, &config);
+
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+
+    // Keep tempdir alive
+    tokio::spawn(async move {
+        let _tmp = tmp;
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = Client::new();
+    (base, client)
+}
+
+#[tokio::test]
+async fn test_health() {
+    let (base, client) = spawn_server().await;
+    let resp = client.get(format!("{base}/health")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+}
+
+#[tokio::test]
+async fn test_register_account() {
+    let (base, client) = spawn_server().await;
+    let resp = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "agent-1", "display_name": "Agent One"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "agent-1");
+    assert!(body["bearerToken"].is_string());
+    assert!(!body["bearerToken"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_full_message_flow() {
+    let (base, client) = spawn_server().await;
+
+    // Register sender and recipient
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Send message
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Hello from integration test",
+            "body": "This is the body"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let msg_id = sent["id"].as_str().unwrap();
+    assert!(!msg_id.is_empty());
+
+    // Recipient lists inbox
+    let inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(inbox["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(inbox["messages"][0]["subject"], "Hello from integration test");
+
+    // Recipient gets message (auto-removes UNREAD)
+    let msg: Value = client
+        .get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(msg["subject"], "Hello from integration test");
+    assert_eq!(msg["body"], "This is the body");
+
+    // Sender lists SENT
+    let sent_list: Value = client
+        .get(format!("{base}/api/messages?label=SENT"))
+        .bearer_auth(sender_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sent_list["messages"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_modify_labels() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient["id"].as_str().unwrap()],
+            "subject": "Modify test",
+            "body": "Body"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let msg_id = sent["id"].as_str().unwrap();
+
+    let modified: Value = client
+        .post(format!("{base}/api/messages/{msg_id}/modify"))
+        .bearer_auth(recipient_token)
+        .json(&json!({
+            "addLabelIds": ["STARRED"],
+            "removeLabelIds": ["UNREAD"]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let labels = modified["labelIds"].as_array().unwrap();
+    assert!(labels.iter().any(|l| l == "STARRED"));
+    assert!(!labels.iter().any(|l| l == "UNREAD"));
+    assert!(labels.iter().any(|l| l == "INBOX"));
+}
+
+#[tokio::test]
+async fn test_trash_and_delete() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient["id"].as_str().unwrap()],
+            "subject": "Trash me",
+            "body": "Body"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Trash
+    let resp = client
+        .post(format!("{base}/api/messages/{msg_id}/trash"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Inbox should be empty
+    let inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(inbox["messages"].as_array().unwrap().len(), 0);
+
+    // Permanently delete
+    let resp = client
+        .delete(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(sender_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_unauthorized_access() {
+    let (base, client) = spawn_server().await;
+
+    let resp = client
+        .get(format!("{base}/api/messages"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+
+    let resp = client
+        .get(format!("{base}/api/messages"))
+        .bearer_auth("invalid-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test]
+async fn test_labels_endpoint() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient["id"].as_str().unwrap()],
+            "subject": "Test",
+            "body": "Body"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let labels: Value = client
+        .get(format!("{base}/api/labels"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let label_list = labels["labels"].as_array().unwrap();
+    let inbox_label = label_list.iter().find(|l| l["name"] == "INBOX").unwrap();
+    assert_eq!(inbox_label["messagesTotal"], 1);
+    assert_eq!(inbox_label["messagesUnread"], 1);
+}
+
+#[tokio::test]
+async fn test_threads_endpoint() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+    let sender_id = sender["id"].as_str().unwrap();
+
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Thread test",
+            "body": "First"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let msg_id = sent["id"].as_str().unwrap();
+
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(recipient_token)
+        .json(&json!({
+            "to": [sender_id],
+            "subject": "Re: Thread test",
+            "body": "Reply",
+            "in_reply_to": msg_id,
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // List threads
+    let threads: Value = client
+        .get(format!("{base}/api/threads?label=INBOX"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(threads["threads"].as_array().unwrap().len() >= 1);
+
+    // Get thread
+    let thread_id = sent["threadId"].as_str().unwrap();
+    let thread: Value = client
+        .get(format!("{base}/api/threads/{thread_id}"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(thread["messageCount"], 2);
+    assert_eq!(thread["messages"].as_array().unwrap().len(), 2);
+}
