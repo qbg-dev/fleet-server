@@ -32,9 +32,9 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 154 tests, all passing
+## Test Summary: 156 tests, all passing
 - 55 unit tests (storage, search, parser, filter, blob, tmux, analytics, 16 property-based, 4 pagination)
-- 51 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination boundaries)
+- 53 integration tests (HTTP API + conformance + edge cases + analytics + hardening + middleware + pagination boundaries + request-id)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -195,6 +195,16 @@
 - 154 tests (55 unit + 51 integration + 8 MCP + 4 CLI + 1 bench)
 - Zero clippy warnings
 
+### Cycle 15 — Refactoring + request ID (2026-03-08)
+- Extracted `row_to_message` and `row_to_thread` helpers: eliminated 3x duplicated row-mapping code
+- Extracted `run_paginated_list` with `PaginatedQuery` struct: shared query-building + pagination for list_messages/list_threads
+- Extracted `query_per_account_stats` from get_analytics, consolidated 4 COUNT queries into 1 SELECT
+- get_analytics: 58→28 lines, list_messages: 73→40 lines, list_threads: 67→38 lines
+- **New feature**: x-request-id header (UUID v4) on all responses via tower-http SetRequestIdLayer + PropagateRequestIdLayer
+- 2 new integration tests: request-id presence + uniqueness
+- 156 tests (55 unit + 53 integration + 8 MCP + 4 CLI + 1 bench)
+- Zero clippy warnings
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
@@ -208,3 +218,5 @@
 - [x] Production hardening: body size limit, request timeout, graceful shutdown
 - [x] Tower-http middleware: CORS, gzip compression, request tracing
 - [x] Pagination boundary fix + tests
+- [x] Refactoring: row_to_message/row_to_thread/run_paginated_list/query_per_account_stats helpers
+- [x] Request ID: x-request-id UUID v4 header on all responses
