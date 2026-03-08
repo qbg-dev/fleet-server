@@ -181,34 +181,7 @@ impl DataStore for SqliteDataStore {
 
                 tx.commit()?;
 
-                // Build return value
-                let recipients: Vec<Recipient> = msg.to.iter().map(|id| Recipient {
-                    account_id: id.clone(),
-                    recipient_type: "to".to_string(),
-                }).chain(msg.cc.iter().map(|id| Recipient {
-                    account_id: id.clone(),
-                    recipient_type: "cc".to_string(),
-                })).collect();
-
-                let mut labels = vec!["SENT".to_string()];
-                labels.extend(msg.labels.clone());
-
-                Ok(Message {
-                    id: msg_id,
-                    thread_id,
-                    from_account: msg.from_account,
-                    subject: msg.subject,
-                    body: msg.body,
-                    snippet: snippet.to_string(),
-                    has_attachments,
-                    internal_date: now,
-                    in_reply_to: msg.in_reply_to,
-                    reply_by: msg.reply_by,
-                    reply_requested,
-                    labels,
-                    recipients,
-                    source: msg.source,
-                })
+                Ok(build_sent_message(msg, msg_id, thread_id, snippet, now, has_attachments, reply_requested))
             })
             .await
             .map_err(storage_err_from_tokio)
@@ -1225,6 +1198,35 @@ fn attach_blobs(
         )?;
     }
     Ok(has_attachments)
+}
+
+/// Build a Message from a NewMessage after insert (for send response).
+fn build_sent_message(
+    msg: NewMessage,
+    id: String,
+    thread_id: String,
+    snippet: String,
+    internal_date: String,
+    has_attachments: bool,
+    reply_requested: bool,
+) -> Message {
+    let recipients: Vec<Recipient> = msg.to.iter().map(|id| Recipient {
+        account_id: id.clone(),
+        recipient_type: "to".to_string(),
+    }).chain(msg.cc.iter().map(|id| Recipient {
+        account_id: id.clone(),
+        recipient_type: "cc".to_string(),
+    })).collect();
+
+    let mut labels = vec!["SENT".to_string()];
+    labels.extend(msg.labels.clone());
+
+    Message {
+        id, thread_id, from_account: msg.from_account, subject: msg.subject,
+        body: msg.body, snippet, has_attachments, internal_date,
+        in_reply_to: msg.in_reply_to, reply_by: msg.reply_by,
+        reply_requested, labels, recipients, source: msg.source,
+    }
 }
 
 fn storage_err_from_tokio(e: tokio_rusqlite::Error) -> StorageError {
