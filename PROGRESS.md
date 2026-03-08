@@ -2,7 +2,7 @@
 
 ## Current Phase: 7 (Continuous Polish)
 
-## Endpoint Summary (23 endpoints operational)
+## Endpoint Summary (24 endpoints operational)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -29,11 +29,12 @@
 | POST | /api/lists | Create mailing list |
 | POST | /api/lists/:id/subscribe | Subscribe |
 | POST | /api/lists/:id/unsubscribe | Unsubscribe |
+| GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 109 tests, all passing
-- 34 unit tests (storage, search, parser, filter, blob, tmux)
-- 28 integration tests (HTTP API + conformance + edge cases)
+## Test Summary: 112 tests, all passing
+- 35 unit tests (storage, search, parser, filter, blob, tmux, analytics)
+- 29 integration tests (HTTP API + conformance + edge cases + analytics)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -127,6 +128,13 @@
 - 4 CLI integration tests (help, init, status, accounts)
 - 109 tests (34 unit + 28 integration + 8 MCP + 4 CLI + 1 bench)
 
+### Cycle 8 — Analytics endpoint (2026-03-08)
+- GET /api/analytics: system-wide totals + per-account stats (sent, received, threads, unread)
+- Analytics model + DataStore trait method + SQLite queries
+- 1 unit test + 1 integration test
+- 112 tests (35 unit + 29 integration + 8 MCP + 4 CLI + 1 bench)
+- 24 endpoints total
+
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
 - [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
@@ -134,3 +142,4 @@
 - [x] Mailing list fan-out on send
 - [x] CLI subcommands (serve, init, status, accounts)
 - [x] Refactoring: insert_message decomposition (187→70 lines)
+- [x] Analytics endpoint (per-account + system-wide stats)
