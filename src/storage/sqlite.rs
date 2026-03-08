@@ -658,6 +658,112 @@ impl DataStore for SqliteDataStore {
             .map_err(StorageError::from)
     }
 
+    async fn create_list(
+        &self,
+        name: &str,
+        description: &str,
+    ) -> Result<String, StorageError> {
+        let name = name.to_string();
+        let description = description.to_string();
+
+        self.db
+            .call(move |conn| {
+                let id = uuid::Uuid::new_v4().to_string();
+                conn.execute(
+                    "INSERT INTO lists (id, name, description) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![id, name, description],
+                )?;
+                Ok(id)
+            })
+            .await
+            .map_err(StorageError::from)
+    }
+
+    async fn subscribe_to_list(
+        &self,
+        list_id: &str,
+        account_id: &str,
+    ) -> Result<(), StorageError> {
+        let list_id = list_id.to_string();
+        let account_id = account_id.to_string();
+
+        self.db
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR IGNORE INTO list_members (list_id, account_id) VALUES (?1, ?2)",
+                    rusqlite::params![list_id, account_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StorageError::from)
+    }
+
+    async fn unsubscribe_from_list(
+        &self,
+        list_id: &str,
+        account_id: &str,
+    ) -> Result<(), StorageError> {
+        let list_id = list_id.to_string();
+        let account_id = account_id.to_string();
+
+        self.db
+            .call(move |conn| {
+                conn.execute(
+                    "DELETE FROM list_members WHERE list_id = ?1 AND account_id = ?2",
+                    rusqlite::params![list_id, account_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StorageError::from)
+    }
+
+    async fn get_list_members(
+        &self,
+        list_id: &str,
+    ) -> Result<Vec<String>, StorageError> {
+        let list_id = list_id.to_string();
+
+        self.db
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT account_id FROM list_members WHERE list_id = ?1"
+                )?;
+                let members: Vec<String> = stmt
+                    .query_map(rusqlite::params![list_id], |row| row.get(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(members)
+            })
+            .await
+            .map_err(StorageError::from)
+    }
+
+    async fn get_list_by_name(
+        &self,
+        name: &str,
+    ) -> Result<(String, String, String), StorageError> {
+        let name = name.to_string();
+
+        self.db
+            .call(move |conn| {
+                conn.query_row(
+                    "SELECT id, name, description FROM lists WHERE name = ?1",
+                    rusqlite::params![name],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => {
+                        tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(format!("list {name}"))))
+                    }
+                    e => tokio_rusqlite::Error::Rusqlite(e),
+                })
+            })
+            .await
+            .map_err(storage_err_from_tokio)
+    }
+
     async fn get_thread(&self, id: &str) -> Result<Thread, StorageError> {
         let id = id.to_string();
         self.db

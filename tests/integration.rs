@@ -659,3 +659,87 @@ async fn test_custom_labels() {
         .send().await.unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+#[tokio::test]
+async fn test_mailing_lists() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let bob: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+    let bob_token = bob["bearerToken"].as_str().unwrap();
+
+    // Create mailing list
+    let list: Value = client
+        .post(format!("{base}/api/lists"))
+        .bearer_auth(alice_token)
+        .json(&json!({"name": "team-all", "description": "All team members"}))
+        .send().await.unwrap().json().await.unwrap();
+    let list_id = list["id"].as_str().unwrap();
+    assert_eq!(list["name"], "team-all");
+
+    // Subscribe both
+    client
+        .post(format!("{base}/api/lists/{list_id}/subscribe"))
+        .bearer_auth(alice_token)
+        .send().await.unwrap();
+    client
+        .post(format!("{base}/api/lists/{list_id}/subscribe"))
+        .bearer_auth(bob_token)
+        .send().await.unwrap();
+
+    // Unsubscribe and resubscribe works
+    client
+        .post(format!("{base}/api/lists/{list_id}/unsubscribe"))
+        .bearer_auth(bob_token)
+        .send().await.unwrap();
+    client
+        .post(format!("{base}/api/lists/{list_id}/subscribe"))
+        .bearer_auth(bob_token)
+        .send().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_webhook_git_commit() {
+    let (base, client) = spawn_server().await;
+
+    let author: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "developer"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "reviewer"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let recipient_id = recipient["id"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+
+    // Send commit webhook
+    let resp: Value = client
+        .post(format!("{base}/api/webhooks/git-commit"))
+        .json(&json!({
+            "author": "developer",
+            "sha": "abc1234def5678",
+            "message": "fix: resolve login bug",
+            "recipients": [recipient_id]
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(resp["delivered"], 1);
+
+    // Recipient should see the commit message in inbox
+    let inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+    let msgs = inbox["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 1);
+    assert!(msgs[0]["subject"].as_str().unwrap().contains("fix: resolve login bug"));
+}

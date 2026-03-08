@@ -3,10 +3,12 @@ pub mod diagnostics;
 pub mod error;
 pub mod models;
 pub mod accounts;
-pub mod messages;
 pub mod labels;
+pub mod lists;
+pub mod messages;
 pub mod search;
 pub mod threads;
+pub mod webhooks;
 
 use axum::{Router, middleware, routing::{get, post, delete}};
 use crate::db::connection::DbPool;
@@ -43,6 +45,12 @@ pub fn router(db: DbPool, _config: &Config) -> Router {
         .route("/api/threads/{id}", get(threads::get_thread))
         // Search
         .route("/api/search", get(search::search))
+        // Mailing Lists
+        .route("/api/lists", post(lists::create_list))
+        .route("/api/lists/{id}/subscribe", post(lists::subscribe))
+        .route("/api/lists/{id}/unsubscribe", post(lists::unsubscribe))
+        // Webhooks
+        .route("/api/webhooks/git-commit", post(webhooks::git_commit))
         // Diagnostics middleware
         .layer(middleware::from_fn_with_state(
             state.clone(),

@@ -37,6 +37,13 @@ pub trait DataStore: Send + Sync + 'static {
     async fn get_thread(&self, id: &str) -> Result<Thread, StorageError>;
     async fn list_threads(&self, account_id: &str, label: &str, max_results: u32, page_token: Option<&str>) -> Result<ThreadList, StorageError>;
 
+    // Mailing lists
+    async fn create_list(&self, name: &str, description: &str) -> Result<String, StorageError>;
+    async fn subscribe_to_list(&self, list_id: &str, account_id: &str) -> Result<(), StorageError>;
+    async fn unsubscribe_from_list(&self, list_id: &str, account_id: &str) -> Result<(), StorageError>;
+    async fn get_list_members(&self, list_id: &str) -> Result<Vec<String>, StorageError>;
+    async fn get_list_by_name(&self, name: &str) -> Result<(String, String, String), StorageError>; // (id, name, description)
+
     // Diagnostics
     async fn get_unread_count(&self, account_id: &str) -> Result<u32, StorageError>;
     async fn get_pending_replies(&self, account_id: &str) -> Result<Vec<PendingReply>, StorageError>;
