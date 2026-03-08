@@ -26,6 +26,7 @@ pub trait DataStore: Send + Sync + 'static {
     async fn list_accounts(&self) -> Result<Vec<Account>, StorageError>;
     async fn update_profile(&self, account_id: &str, display_name: Option<&str>, bio: Option<&str>) -> Result<Account, StorageError>;
     async fn update_pane(&self, account_id: &str, pane_id: &str) -> Result<(), StorageError>;
+    async fn reset_token(&self, account_id: &str) -> Result<Account, StorageError>;
 
     // Messages
     async fn insert_message(&self, msg: NewMessage) -> Result<Message, StorageError>;

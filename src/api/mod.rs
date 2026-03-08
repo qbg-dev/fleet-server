@@ -45,6 +45,7 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         // Accounts (create is unauthenticated)
         .route("/api/accounts", post(accounts::create_account))
         .route("/api/accounts/me", get(accounts::get_account_me).put(accounts::update_profile))
+        .route("/api/accounts/me/reset-token", post(accounts::reset_token))
         .route("/api/accounts/{id}", get(accounts::get_account))
         .route("/api/accounts/{id}/pane", post(accounts::update_pane))
         .route("/api/accounts/{id}/pending", get(accounts::pending))

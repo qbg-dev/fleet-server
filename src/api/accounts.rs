@@ -104,6 +104,24 @@ pub async fn update_pane(
     })))
 }
 
+/// POST /api/accounts/me/reset-token — generate a new bearer token (invalidates the old one)
+pub async fn reset_token(
+    auth: AuthAccount,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let account = state
+        .store
+        .reset_token(&auth.0.id)
+        .await
+        .map_err(ApiError::from)?;
+
+    Ok(Json(json!({
+        "id": account.id,
+        "name": account.name,
+        "bearerToken": account.bearer_token,
+    })))
+}
+
 /// PUT /api/accounts/me — update own profile (display_name, bio)
 pub async fn update_profile(
     auth: AuthAccount,

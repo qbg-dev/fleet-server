@@ -146,6 +146,31 @@ impl DataStore for DoltDataStore {
         Ok(())
     }
 
+    async fn reset_token(&self, account_id: &str) -> Result<Account, StorageError> {
+        let new_token = uuid::Uuid::new_v4().to_string();
+
+        let result = sqlx::query(
+            "UPDATE accounts SET bearer_token = ? WHERE id = ?",
+        )
+        .bind(&new_token)
+        .bind(account_id)
+        .execute(&self.db)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NotFound(format!("account {account_id}")));
+        }
+
+        let row = sqlx::query(
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?",
+        )
+        .bind(account_id)
+        .fetch_one(&self.db)
+        .await?;
+
+        Ok(row_to_account(&row))
+    }
+
     async fn insert_message(&self, msg: NewMessage) -> Result<Message, StorageError> {
         let mut tx = self.db.begin().await?;
         let msg_id = uuid::Uuid::new_v4().to_string();
