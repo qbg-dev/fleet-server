@@ -27,6 +27,7 @@ pub async fn send_message(
         reply_by: req.reply_by,
         labels: req.labels,
         source: req.source,
+        attachments: req.attachments,
     };
 
     let sent = state.store.insert_message(msg).await.map_err(ApiError::from)?;
@@ -88,6 +89,13 @@ pub async fn get_message(
         .await
         .ok(); // ignore if no UNREAD label
 
+    // Fetch attachments if present
+    let attachments = if msg.has_attachments {
+        state.store.get_attachments(&id).await.unwrap_or_default()
+    } else {
+        vec![]
+    };
+
     Ok(Json(json!({
         "id": msg.id,
         "threadId": msg.thread_id,
@@ -103,6 +111,12 @@ pub async fn get_message(
         "replyBy": msg.reply_by,
         "replyRequested": msg.reply_requested,
         "hasAttachments": msg.has_attachments,
+        "attachments": attachments.iter().map(|a| json!({
+            "blobHash": a.blob_hash,
+            "filename": a.filename,
+            "contentType": a.content_type,
+            "size": a.size,
+        })).collect::<Vec<_>>(),
         "source": msg.source,
     })))
 }

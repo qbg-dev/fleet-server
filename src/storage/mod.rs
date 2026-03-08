@@ -30,6 +30,10 @@ pub trait DataStore: Send + Sync + 'static {
     async fn create_label(&self, account_id: &str, name: &str) -> Result<(String, String), StorageError>;
     async fn delete_label(&self, account_id: &str, name: &str) -> Result<(), StorageError>;
 
+    // Attachments
+    async fn attach_blob(&self, message_id: &str, blob_hash: &str, filename: &str, content_type: &str, size: u64) -> Result<(), StorageError>;
+    async fn get_attachments(&self, message_id: &str) -> Result<Vec<Attachment>, StorageError>;
+
     // Batch
     async fn batch_modify_labels(&self, message_ids: &[String], account_id: &str, add: &[String], remove: &[String]) -> Result<(), StorageError>;
 

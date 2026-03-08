@@ -254,6 +254,21 @@ impl DataStore for SqliteDataStore {
                     rusqlite::params![msg_id],
                 )?;
 
+                // Attach blobs
+                let has_attachments = !msg.attachments.is_empty();
+                for blob_hash in &msg.attachments {
+                    tx.execute(
+                        "INSERT INTO attachments (message_id, blob_hash) VALUES (?1, ?2)",
+                        rusqlite::params![msg_id, blob_hash],
+                    )?;
+                }
+                if has_attachments {
+                    tx.execute(
+                        "UPDATE messages SET has_attachments = 1 WHERE id = ?1",
+                        rusqlite::params![msg_id],
+                    )?;
+                }
+
                 tx.commit()?;
 
                 // Build return value
@@ -275,7 +290,7 @@ impl DataStore for SqliteDataStore {
                     subject: msg.subject,
                     body: msg.body,
                     snippet: snippet.to_string(),
-                    has_attachments: false,
+                    has_attachments: has_attachments,
                     internal_date: now,
                     in_reply_to: msg.in_reply_to,
                     reply_by: msg.reply_by,
@@ -565,6 +580,59 @@ impl DataStore for SqliteDataStore {
                     .collect();
 
                 Ok(labels)
+            })
+            .await
+            .map_err(StorageError::from)
+    }
+
+    async fn attach_blob(
+        &self,
+        message_id: &str,
+        blob_hash: &str,
+        filename: &str,
+        content_type: &str,
+        size: u64,
+    ) -> Result<(), StorageError> {
+        let message_id = message_id.to_string();
+        let blob_hash = blob_hash.to_string();
+        let filename = filename.to_string();
+        let content_type = content_type.to_string();
+
+        self.db
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO attachments (message_id, blob_hash, filename, content_type, size) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![message_id, blob_hash, filename, content_type, size],
+                )?;
+                // Mark message as having attachments
+                conn.execute(
+                    "UPDATE messages SET has_attachments = 1 WHERE id = ?1",
+                    rusqlite::params![message_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(StorageError::from)
+    }
+
+    async fn get_attachments(&self, message_id: &str) -> Result<Vec<Attachment>, StorageError> {
+        let message_id = message_id.to_string();
+        self.db
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT blob_hash, filename, content_type, size FROM attachments WHERE message_id = ?1",
+                )?;
+                let attachments = stmt
+                    .query_map(rusqlite::params![message_id], |row| {
+                        Ok(Attachment {
+                            blob_hash: row.get(0)?,
+                            filename: row.get(1)?,
+                            content_type: row.get(2)?,
+                            size: row.get(3)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(attachments)
             })
             .await
             .map_err(StorageError::from)
@@ -1059,7 +1127,7 @@ mod tests {
             in_reply_to: None,
             reply_by: None,
             labels: vec![],
-            source: None,
+            source: None, attachments: vec![],
         };
 
         let sent = store.insert_message(msg).await.unwrap();
@@ -1090,7 +1158,7 @@ mod tests {
             in_reply_to: None,
             reply_by: None,
             labels: vec![],
-            source: None,
+            source: None, attachments: vec![],
         };
 
         let sent = store.insert_message(msg).await.unwrap();
@@ -1123,7 +1191,7 @@ mod tests {
                 in_reply_to: None,
                 reply_by: None,
                 labels: vec![],
-                source: None,
+                source: None, attachments: vec![],
             };
             store.insert_message(msg).await.unwrap();
         }
@@ -1153,7 +1221,7 @@ mod tests {
             in_reply_to: None,
             reply_by: None,
             labels: vec![],
-            source: None,
+            source: None, attachments: vec![],
         };
         let sent = store.insert_message(msg).await.unwrap();
 
@@ -1183,7 +1251,7 @@ mod tests {
             in_reply_to: None,
             reply_by: None,
             labels: vec![],
-            source: None,
+            source: None, attachments: vec![],
         };
         let sent = store.insert_message(msg).await.unwrap();
 
@@ -1210,7 +1278,7 @@ mod tests {
                 in_reply_to: None,
                 reply_by: None,
                 labels: vec![],
-                source: None,
+                source: None, attachments: vec![],
             };
             store.insert_message(msg).await.unwrap();
         }
@@ -1239,7 +1307,7 @@ mod tests {
             in_reply_to: None,
             reply_by: None,
             labels: vec![],
-            source: None,
+            source: None, attachments: vec![],
         };
 
         let sent = store.insert_message(msg).await.unwrap();
@@ -1255,7 +1323,7 @@ mod tests {
             in_reply_to: Some(sent.id.clone()),
             reply_by: None,
             labels: vec![],
-            source: None,
+            source: None, attachments: vec![],
         };
         let reply_sent = store.insert_message(reply).await.unwrap();
         assert_eq!(reply_sent.thread_id, sent.thread_id);
@@ -1283,7 +1351,7 @@ mod tests {
             in_reply_to: None,
             reply_by: Some("2026-03-09T00:00:00Z".to_string()),
             labels: vec![],
-            source: None,
+            source: None, attachments: vec![],
         };
         store.insert_message(msg).await.unwrap();
 

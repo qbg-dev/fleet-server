@@ -773,3 +773,54 @@ async fn test_blob_upload_download() {
         .bytes().await.unwrap();
     assert_eq!(data.as_ref(), b"hello blob content");
 }
+
+#[tokio::test]
+async fn test_send_message_with_attachments() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Upload a blob first
+    let blob: Value = client
+        .post(format!("{base}/api/blobs"))
+        .bearer_auth(sender_token)
+        .body("attachment content here")
+        .send().await.unwrap().json().await.unwrap();
+    let blob_hash = blob["hash"].as_str().unwrap();
+
+    // Send message with attachment
+    let sent: Value = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "With attachment",
+            "body": "See attached",
+            "attachments": [blob_hash]
+        }))
+        .send().await.unwrap().json().await.unwrap();
+
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Get message should show attachments
+    let msg: Value = client
+        .get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(msg["hasAttachments"], true);
+    let attachments = msg["attachments"].as_array().unwrap();
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0]["blobHash"], blob_hash);
+}

@@ -35,7 +35,7 @@ pub struct Recipient {
     pub recipient_type: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewMessage {
     pub from_account: String,
     pub to: Vec<String>,
@@ -47,6 +47,7 @@ pub struct NewMessage {
     pub reply_by: Option<String>,
     pub labels: Vec<String>,
     pub source: Option<String>,
+    pub attachments: Vec<String>, // blob hashes
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +81,14 @@ pub struct LabelCount {
     pub label_type: String,
     pub message_count: u32,
     pub unread_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Attachment {
+    pub blob_hash: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

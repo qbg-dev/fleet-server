@@ -127,7 +127,7 @@ mod tests {
             subject: "Deploy notification".to_string(),
             body: "The deployment to production succeeded".to_string(),
             thread_id: None, in_reply_to: None, reply_by: None,
-            labels: vec![], source: None,
+            labels: vec![], source: None, attachments: vec![],
         }).await.unwrap();
 
         store.insert_message(NewMessage {
@@ -137,7 +137,7 @@ mod tests {
             subject: "Bug report".to_string(),
             body: "Found a bug in the login flow".to_string(),
             thread_id: None, in_reply_to: None, reply_by: None,
-            labels: vec![], source: None,
+            labels: vec![], source: None, attachments: vec![],
         }).await.unwrap();
 
         let results = search.search(&recipient.id, "deploy", 10).await.unwrap();
@@ -166,7 +166,7 @@ mod tests {
             subject: "From Alice".to_string(),
             body: "Hello from Alice".to_string(),
             thread_id: None, in_reply_to: None, reply_by: None,
-            labels: vec![], source: None,
+            labels: vec![], source: None, attachments: vec![],
         }).await.unwrap();
 
         // Bob sends to Charlie
@@ -177,7 +177,7 @@ mod tests {
             subject: "From Bob".to_string(),
             body: "Hello from Bob".to_string(),
             thread_id: None, in_reply_to: None, reply_by: None,
-            labels: vec![], source: None,
+            labels: vec![], source: None, attachments: vec![],
         }).await.unwrap();
 
         // Search for messages from alice
@@ -202,7 +202,7 @@ mod tests {
             subject: "Star me".to_string(),
             body: "Body".to_string(),
             thread_id: None, in_reply_to: None, reply_by: None,
-            labels: vec![], source: None,
+            labels: vec![], source: None, attachments: vec![],
         }).await.unwrap();
 
         // Add STARRED label

@@ -14,6 +14,8 @@ pub struct SendMessageRequest {
     #[serde(default)]
     pub labels: Vec<String>,
     pub source: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<String>, // blob hashes
 }
 
 #[derive(Debug, Deserialize)]

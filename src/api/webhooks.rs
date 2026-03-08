@@ -46,6 +46,7 @@ pub async fn git_commit(
         reply_by: None,
         labels: vec!["COMMIT".to_string()],
         source: Some("webhook:git-commit".to_string()),
+        attachments: vec![],
     };
 
     let sent = state.store.insert_message(msg).await.map_err(ApiError::from)?;
