@@ -5,6 +5,7 @@ use axum::{
 use crate::error::ApiError;
 use crate::storage::models::Account;
 use crate::storage::sqlite::SqliteDataStore;
+use crate::storage::blob::FsBlobStore;
 use crate::storage::fts::SqliteSearchStore;
 use crate::storage::DataStore;
 
@@ -47,4 +48,5 @@ impl FromRequestParts<AppState> for AuthAccount {
 pub struct AppState {
     pub store: SqliteDataStore,
     pub search: SqliteSearchStore,
+    pub blobs: FsBlobStore,
 }

@@ -743,3 +743,33 @@ async fn test_webhook_git_commit() {
     assert_eq!(msgs.len(), 1);
     assert!(msgs[0]["subject"].as_str().unwrap().contains("fix: resolve login bug"));
 }
+
+#[tokio::test]
+async fn test_blob_upload_download() {
+    let (base, client) = spawn_server().await;
+
+    let account: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "agent-1"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = account["bearerToken"].as_str().unwrap();
+
+    // Upload
+    let resp: Value = client
+        .post(format!("{base}/api/blobs"))
+        .bearer_auth(token)
+        .body("hello blob content")
+        .send().await.unwrap().json().await.unwrap();
+
+    let hash = resp["hash"].as_str().unwrap();
+    assert!(!hash.is_empty());
+    assert_eq!(resp["size"], 18);
+
+    // Download
+    let data = client
+        .get(format!("{base}/api/blobs/{hash}"))
+        .bearer_auth(token)
+        .send().await.unwrap()
+        .bytes().await.unwrap();
+    assert_eq!(data.as_ref(), b"hello blob content");
+}
