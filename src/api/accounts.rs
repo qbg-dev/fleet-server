@@ -10,11 +10,25 @@ pub async fn create_account(
     State(state): State<AppState>,
     Json(req): Json<CreateAccountRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("account name cannot be empty".into()));
+    }
+    if name.len() > 256 {
+        return Err(ApiError::BadRequest("account name too long (max 256 chars)".into()));
+    }
+
     let account = state
         .store
-        .create_account(&req.name, req.display_name.as_deref())
+        .create_account(name, req.display_name.as_deref())
         .await
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint") {
+                ApiError::Conflict(format!("account already exists: {name}"))
+            } else {
+                ApiError::BadRequest(e.to_string())
+            }
+        })?;
 
     Ok(Json(json!({
         "id": account.id,
@@ -89,11 +103,16 @@ pub async fn update_pane(
 
 /// GET /api/accounts/:id — get account profile
 pub async fn get_account(
-    _auth: AuthAccount,
+    auth: AuthAccount,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let id = if id == "me" { _auth.0.id.clone() } else { id };
+    let id = if id == "me" { auth.0.id.clone() } else { id };
+
+    // Only allow viewing own account
+    if id != auth.0.id {
+        return Err(ApiError::Forbidden);
+    }
 
     let account = state
         .store

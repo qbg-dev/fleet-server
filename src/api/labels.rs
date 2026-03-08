@@ -50,11 +50,18 @@ pub async fn create_label(
         return Err(ApiError::BadRequest("label name too long (max 256 chars)".into()));
     }
 
+    let trimmed_name = name.to_string();
     let label = state
         .store
-        .create_label(&auth.0.id, &req.name)
+        .create_label(&auth.0.id, &trimmed_name)
         .await
-        .map_err(ApiError::from)?;
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint") {
+                ApiError::Conflict(format!("label already exists: {trimmed_name}"))
+            } else {
+                ApiError::from(e)
+            }
+        })?;
 
     Ok(Json(json!({
         "id": label.0,

@@ -97,6 +97,11 @@ pub async fn get_message(
 ) -> Result<Json<Value>, ApiError> {
     let msg = state.store.get_message(&id).await.map_err(ApiError::from)?;
 
+    // Ownership check: caller must be sender or a recipient
+    if !is_message_participant(&msg, &auth.0.id) {
+        return Err(ApiError::Forbidden);
+    }
+
     // Auto-remove UNREAD for the authenticated user
     state
         .store
@@ -224,10 +229,16 @@ pub async fn batch_modify(
 
 /// DELETE /api/messages/:id
 pub async fn delete_message(
-    _auth: AuthAccount,
+    auth: AuthAccount,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    // Ownership check: must be sender or recipient to delete
+    let msg = state.store.get_message(&id).await.map_err(ApiError::from)?;
+    if !is_message_participant(&msg, &auth.0.id) {
+        return Err(ApiError::Forbidden);
+    }
+
     state.store.delete_message(&id).await.map_err(ApiError::from)?;
     Ok(Json(json!({"deleted": true})))
 }
@@ -263,6 +274,12 @@ async fn expand_list_recipients(
     }
 
     Ok(expanded)
+}
+
+/// Check if an account is the sender or a recipient of a message.
+fn is_message_participant(msg: &crate::storage::models::Message, account_id: &str) -> bool {
+    msg.from_account == account_id
+        || msg.recipients.iter().any(|r| r.account_id == account_id)
 }
 
 /// Look up each recipient's tmux pane and send a notification.

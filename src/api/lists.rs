@@ -18,9 +18,17 @@ pub async fn create_list(
     State(state): State<AppState>,
     Json(req): Json<CreateListRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("list name cannot be empty".into()));
+    }
+    if name.len() > 256 {
+        return Err(ApiError::BadRequest("list name too long (max 256 chars)".into()));
+    }
+
     let id = state
         .store
-        .create_list(&req.name, &req.description)
+        .create_list(name, &req.description)
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 

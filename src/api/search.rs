@@ -23,16 +23,15 @@ pub async fn search(
     // Fetch full messages for the result IDs
     let mut messages = Vec::new();
     for id in &ids {
-        if let Ok(msg) = state.store.get_message(id).await {
-            messages.push(json!({
-                "id": msg.id,
-                "threadId": msg.thread_id,
-                "from": msg.from_account,
-                "subject": msg.subject,
-                "snippet": msg.snippet,
-                "internalDate": msg.internal_date,
-            }));
-        }
+        let msg = state.store.get_message(id).await.map_err(ApiError::from)?;
+        messages.push(json!({
+            "id": msg.id,
+            "threadId": msg.thread_id,
+            "from": msg.from_account,
+            "subject": msg.subject,
+            "snippet": msg.snippet,
+            "internalDate": msg.internal_date,
+        }));
     }
 
     Ok(Json(json!({

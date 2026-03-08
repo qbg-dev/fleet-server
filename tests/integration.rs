@@ -751,7 +751,7 @@ async fn test_mailing_lists() {
 async fn test_webhook_git_commit() {
     let (base, client) = spawn_server().await;
 
-    let _author: Value = client
+    let author: Value = client
         .post(format!("{base}/api/accounts"))
         .json(&json!({"name": "developer"}))
         .send().await.unwrap().json().await.unwrap();
@@ -760,12 +760,14 @@ async fn test_webhook_git_commit() {
         .json(&json!({"name": "reviewer"}))
         .send().await.unwrap().json().await.unwrap();
 
+    let author_token = author["bearerToken"].as_str().unwrap();
     let recipient_id = recipient["id"].as_str().unwrap();
     let recipient_token = recipient["bearerToken"].as_str().unwrap();
 
-    // Send commit webhook
+    // Send commit webhook (requires auth)
     let resp: Value = client
         .post(format!("{base}/api/webhooks/git-commit"))
+        .bearer_auth(author_token)
         .json(&json!({
             "author": "developer",
             "sha": "abc1234def5678",
@@ -2615,4 +2617,179 @@ async fn test_rate_limit_unauthenticated_passes_through() {
             .unwrap();
         assert_eq!(resp.status(), 200);
     }
+}
+
+// --- Security: Authorization Tests ---
+
+#[tokio::test]
+async fn test_get_message_forbidden_for_non_participant() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"})).send().await.unwrap().json().await.unwrap();
+    let bob: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"})).send().await.unwrap().json().await.unwrap();
+    let eve: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "eve"})).send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+    let bob_token = bob["bearerToken"].as_str().unwrap();
+    let eve_token = eve["bearerToken"].as_str().unwrap();
+
+    // Alice sends to Bob
+    let sent: Value = client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(alice_token)
+        .json(&json!({"to": [bob_id], "subject": "Secret", "body": "classified"}))
+        .send().await.unwrap().json().await.unwrap();
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Bob (recipient) can read it
+    let resp = client.get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(bob_token).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Eve (non-participant) gets 403
+    let resp = client.get(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(eve_token).send().await.unwrap();
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_delete_message_forbidden_for_non_participant() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"})).send().await.unwrap().json().await.unwrap();
+    let bob: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"})).send().await.unwrap().json().await.unwrap();
+    let eve: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "eve"})).send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+    let eve_token = eve["bearerToken"].as_str().unwrap();
+
+    let sent: Value = client.post(format!("{base}/api/messages/send"))
+        .bearer_auth(alice_token)
+        .json(&json!({"to": [bob_id], "subject": "Secret", "body": "classified"}))
+        .send().await.unwrap().json().await.unwrap();
+    let msg_id = sent["id"].as_str().unwrap();
+
+    // Eve cannot delete Alice→Bob message
+    let resp = client.delete(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(eve_token).send().await.unwrap();
+    assert_eq!(resp.status(), 403);
+
+    // Alice (sender) can delete
+    let resp = client.delete(format!("{base}/api/messages/{msg_id}"))
+        .bearer_auth(alice_token).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_get_account_idor_blocked() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"})).send().await.unwrap().json().await.unwrap();
+    let bob: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"})).send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+    let alice_id = alice["id"].as_str().unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+
+    // Alice can view own account via "me"
+    let resp = client.get(format!("{base}/api/accounts/me"))
+        .bearer_auth(alice_token).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Alice can view own account via ID
+    let resp = client.get(format!("{base}/api/accounts/{alice_id}"))
+        .bearer_auth(alice_token).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Alice cannot view Bob's account
+    let resp = client.get(format!("{base}/api/accounts/{bob_id}"))
+        .bearer_auth(alice_token).send().await.unwrap();
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_webhook_requires_auth() {
+    let (base, client) = spawn_server().await;
+
+    // Unauthenticated webhook should be rejected
+    let resp = client.post(format!("{base}/api/webhooks/git-commit"))
+        .json(&json!({"author": "dev", "sha": "abc1234", "message": "test", "recipients": []}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test]
+async fn test_duplicate_label_returns_409() {
+    let (base, client) = spawn_server().await;
+
+    let user: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"})).send().await.unwrap().json().await.unwrap();
+    let token = user["bearerToken"].as_str().unwrap();
+
+    // Create label
+    let resp = client.post(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .json(&json!({"name": "my-label"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Duplicate should return 409
+    let resp = client.post(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .json(&json!({"name": "my-label"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 409);
+}
+
+#[tokio::test]
+async fn test_duplicate_account_returns_409() {
+    let (base, client) = spawn_server().await;
+
+    let resp = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"})).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"})).send().await.unwrap();
+    assert_eq!(resp.status(), 409);
+}
+
+#[tokio::test]
+async fn test_create_account_validation() {
+    let (base, client) = spawn_server().await;
+
+    // Empty name
+    let resp = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": ""})).send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+
+    // Whitespace-only name
+    let resp = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "   "})).send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_create_label_saves_trimmed_name() {
+    let (base, client) = spawn_server().await;
+
+    let user: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"})).send().await.unwrap().json().await.unwrap();
+    let token = user["bearerToken"].as_str().unwrap();
+
+    // Create label with leading/trailing whitespace
+    let resp: Value = client.post(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .json(&json!({"name": "  my-label  "}))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(resp["name"].as_str().unwrap(), "my-label");
 }

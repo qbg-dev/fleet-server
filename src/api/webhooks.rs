@@ -1,5 +1,5 @@
 use axum::{extract::State, Json};
-use crate::api::auth::AppState;
+use crate::api::auth::{AppState, AuthAccount};
 use crate::error::ApiError;
 use crate::storage::models::NewMessage;
 use crate::storage::DataStore;
@@ -17,6 +17,7 @@ pub struct GitCommitWebhook {
 
 /// POST /api/webhooks/git-commit — deliver commit notification as mail
 pub async fn git_commit(
+    _auth: AuthAccount,
     State(state): State<AppState>,
     Json(req): Json<GitCommitWebhook>,
 ) -> Result<Json<Value>, ApiError> {
