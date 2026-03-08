@@ -25,6 +25,15 @@ pub struct ModifyLabelsRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct BatchModifyRequest {
+    pub ids: Vec<String>,
+    #[serde(default, rename = "addLabelIds")]
+    pub add_label_ids: Vec<String>,
+    #[serde(default, rename = "removeLabelIds")]
+    pub remove_label_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateAccountRequest {
     pub name: String,
     pub display_name: Option<String>,

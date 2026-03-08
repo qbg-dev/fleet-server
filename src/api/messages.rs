@@ -1,6 +1,6 @@
 use axum::{extract::{Path, Query, State}, Json};
 use crate::api::auth::{AppState, AuthAccount};
-use crate::api::models::{ListQuery, ModifyLabelsRequest, SendMessageRequest};
+use crate::api::models::{BatchModifyRequest, ListQuery, ModifyLabelsRequest, SendMessageRequest};
 use crate::error::ApiError;
 use crate::storage::models::NewMessage;
 use crate::storage::DataStore;
@@ -167,6 +167,30 @@ pub async fn trash_message(
         "id": id,
         "labelIds": ["TRASH"],
     })))
+}
+
+/// POST /api/messages/batchModify
+pub async fn batch_modify(
+    auth: AuthAccount,
+    State(state): State<AppState>,
+    Json(req): Json<BatchModifyRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if req.ids.is_empty() {
+        return Err(ApiError::BadRequest("empty ids".into()));
+    }
+
+    state
+        .store
+        .batch_modify_labels(
+            &req.ids,
+            &auth.0.id,
+            &req.add_label_ids,
+            &req.remove_label_ids,
+        )
+        .await
+        .map_err(ApiError::from)?;
+
+    Ok(Json(json!({"modified": req.ids.len()})))
 }
 
 /// DELETE /api/messages/:id

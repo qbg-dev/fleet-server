@@ -34,8 +34,10 @@ pub fn router(db: DbPool, _config: &Config) -> Router {
         .route("/api/messages/{id}", delete(messages::delete_message))
         .route("/api/messages/{id}/modify", post(messages::modify_message))
         .route("/api/messages/{id}/trash", post(messages::trash_message))
+        .route("/api/messages/batchModify", post(messages::batch_modify))
         // Labels
-        .route("/api/labels", get(labels::list_labels))
+        .route("/api/labels", get(labels::list_labels).post(labels::create_label))
+        .route("/api/labels/{name}", delete(labels::delete_label))
         // Threads
         .route("/api/threads", get(threads::list_threads))
         .route("/api/threads/{id}", get(threads::get_thread))

@@ -27,6 +27,11 @@ pub trait DataStore: Send + Sync + 'static {
     async fn remove_labels(&self, message_id: &str, account_id: &str, labels: &[String]) -> Result<(), StorageError>;
     async fn get_labels(&self, message_id: &str, account_id: &str) -> Result<Vec<String>, StorageError>;
     async fn list_labels_with_counts(&self, account_id: &str) -> Result<Vec<LabelCount>, StorageError>;
+    async fn create_label(&self, account_id: &str, name: &str) -> Result<(String, String), StorageError>;
+    async fn delete_label(&self, account_id: &str, name: &str) -> Result<(), StorageError>;
+
+    // Batch
+    async fn batch_modify_labels(&self, message_ids: &[String], account_id: &str, add: &[String], remove: &[String]) -> Result<(), StorageError>;
 
     // Threads
     async fn get_thread(&self, id: &str) -> Result<Thread, StorageError>;

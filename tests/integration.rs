@@ -578,3 +578,84 @@ async fn test_search_endpoint() {
     assert_eq!(results["resultSizeEstimate"], 1);
     assert_eq!(results["messages"][0]["subject"], "Code review");
 }
+
+#[tokio::test]
+async fn test_batch_modify() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send().await.unwrap().json().await.unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Send 3 messages
+    let mut msg_ids = Vec::new();
+    for i in 0..3 {
+        let sent: Value = client
+            .post(format!("{base}/api/messages/send"))
+            .bearer_auth(sender_token)
+            .json(&json!({
+                "to": [recipient_id],
+                "subject": format!("Batch {i}"),
+                "body": "Body"
+            }))
+            .send().await.unwrap().json().await.unwrap();
+        msg_ids.push(sent["id"].as_str().unwrap().to_string());
+    }
+
+    // Batch mark as read
+    let resp: Value = client
+        .post(format!("{base}/api/messages/batchModify"))
+        .bearer_auth(recipient_token)
+        .json(&json!({
+            "ids": msg_ids,
+            "removeLabelIds": ["UNREAD"],
+            "addLabelIds": ["STARRED"]
+        }))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(resp["modified"], 3);
+
+    // Verify labels changed
+    let labels: Value = client
+        .get(format!("{base}/api/labels"))
+        .bearer_auth(recipient_token)
+        .send().await.unwrap().json().await.unwrap();
+    let label_list = labels["labels"].as_array().unwrap();
+    let starred = label_list.iter().find(|l| l["name"] == "STARRED").unwrap();
+    assert_eq!(starred["messagesTotal"], 3);
+}
+
+#[tokio::test]
+async fn test_custom_labels() {
+    let (base, client) = spawn_server().await;
+
+    let account: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "agent-1"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = account["bearerToken"].as_str().unwrap();
+
+    // Create custom label
+    let label: Value = client
+        .post(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .json(&json!({"name": "MY_CUSTOM"}))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(label["name"], "MY_CUSTOM");
+    assert_eq!(label["type"], "user");
+
+    // Delete custom label
+    let resp = client
+        .delete(format!("{base}/api/labels/MY_CUSTOM"))
+        .bearer_auth(token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
