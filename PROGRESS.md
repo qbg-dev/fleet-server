@@ -1,8 +1,8 @@
 # PROGRESS
 
-## Current Phase: 5 (Attachments + Push)
+## Current Phase: 6 (Registry Integration + Polish)
 
-## Endpoint Summary (20 endpoints operational)
+## Endpoint Summary (22 endpoints operational)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -23,40 +23,40 @@
 | GET | /api/threads | List threads by label |
 | GET | /api/threads/:id | Get thread with messages |
 | GET | /api/search?q= | FTS5 + Gmail query syntax |
+| POST | /api/blobs | Upload blob |
+| GET | /api/blobs/:hash | Download blob |
 | POST | /api/lists | Create mailing list |
 | POST | /api/lists/:id/subscribe | Subscribe |
 | POST | /api/lists/:id/unsubscribe | Unsubscribe |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 62 tests, all passing
-- 24 unit tests (storage + search + parser + filter)
-- 14 integration tests (HTTP API)
+## Test Summary: 73 tests, all passing
+- 29 unit tests (storage, search, parser, filter, blob)
+- 15 integration tests (HTTP API)
 - Duplicated across lib and bin crate targets
+
+## Release Binary: 5.1MB (stripped, thin LTO)
 
 ## Cycle Log
 
 ### Cycle 0 — Bootstrap (2026-03-08)
-- Project scaffolded with Cargo.toml, MISSION.md, ROADMAP.md
+- Project scaffolded
 - Rust toolchain installed on kevinster (1.94.0)
-- Reference repos cloned for study
-- tmux session `bms` created
-- Chief-of-staff agent launched
 
-### Cycle 1 — Phase 1+2 Complete (2026-03-08)
-- Full storage layer: SqliteDataStore with 12 unit tests
-- HTTP API: auth middleware, accounts, messages, labels, threads
-- _diagnostics middleware on all responses
+### Cycle 1 — Phase 1+2 (2026-03-08)
+- Full storage layer with 12 unit tests
+- HTTP API: auth, accounts, messages, labels, threads
+- _diagnostics middleware
 - 9 integration tests
 
-### Cycle 2 — Phase 3+4 Complete (2026-03-08)
-- FTS5 search with Gmail query parser (from:, to:, label:, has:attachment, before:, after:)
-- CompiledQuery: parsed AST → SQL WHERE + FTS5 MATCH
-- Batch modify endpoint
-- Custom label CRUD
-- Mailing lists (create, subscribe, unsubscribe)
-- Git commit webhook
+### Cycle 2 — Phase 3-5 (2026-03-08)
+- FTS5 search with Gmail query parser
+- Batch modify, custom label CRUD
+- Mailing lists, git commit webhook
 - Recycle readiness endpoint
-- Total: 20 endpoints, 62 tests
+- Content-addressed blob store with zstd compression
+- mail-hook.sh updated to use webhook endpoint
+- Total: 22 endpoints, 73 tests
 
 ## ROADMAP Status
 
@@ -64,23 +64,22 @@
 ### Phase 2: Core Messages — COMPLETE ✓
 ### Phase 3: Threading + Search — COMPLETE ✓
 ### Phase 4: Mailing Lists + Request/Response — COMPLETE ✓
-- [x] Mailing lists: create, subscribe, unsubscribe
-- [x] Request/response: reply_by field, pending replies in _diagnostics
-- [x] Custom label CRUD + label list with unread counts
-- [x] Batch modify
-- [x] Webhook endpoint for git commit notifications
-- [ ] Background: deadline expiry → auto-label OVERDUE (deferred to Phase 7)
-- [ ] Fan-out at send time (list → individual copies) (deferred)
+### Phase 5: Attachments + Push — MOSTLY COMPLETE ✓
+- [x] Blob store (SHA-256, zstd >4KB, content-addressed, dedup)
+- [x] Upload blob (POST /api/blobs)
+- [x] Download blob (GET /api/blobs/:hash)
+- [ ] Attach blobs to messages on send (link via attachments table)
+- [ ] tmux push notification (batch, dead pane detection)
 
-### Phase 5: Attachments + Push — IN PROGRESS
-- [ ] Blob store (SHA-256, zstd, content-addressed)
-- [ ] Upload/download blob endpoints
-- [ ] Attach blobs to messages
-- [ ] tmux push notification
-
-### Phase 6: Registry Integration + Polish
+### Phase 6: Registry Integration + Polish — PARTIALLY DONE
 - [x] Recycle readiness endpoint
+- [x] mail-hook.sh script
 - [ ] Auto-provision from registry.json
-- [ ] Compression: zstd on message bodies
-- [ ] mail-hook.sh script
+- [ ] Compression: zstd on message bodies >512 bytes
 - [ ] End-to-end conformance tests
+
+### Phase 7+: Continuous Polish
+- [ ] MCP stdio wrapper
+- [ ] Performance profiling
+- [ ] Background OVERDUE labeling
+- [ ] Mailing list fan-out on send
