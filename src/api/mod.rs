@@ -5,17 +5,20 @@ pub mod models;
 pub mod accounts;
 pub mod messages;
 pub mod labels;
+pub mod search;
 pub mod threads;
 
 use axum::{Router, middleware, routing::{get, post, delete}};
 use crate::db::connection::DbPool;
 use crate::config::Config;
 use crate::storage::sqlite::SqliteDataStore;
+use crate::storage::fts::SqliteSearchStore;
 use auth::AppState;
 
 pub fn router(db: DbPool, _config: &Config) -> Router {
     let state = AppState {
-        store: SqliteDataStore::new(db),
+        store: SqliteDataStore::new(db.clone()),
+        search: SqliteSearchStore::new(db),
     };
 
     Router::new()
@@ -36,7 +39,9 @@ pub fn router(db: DbPool, _config: &Config) -> Router {
         // Threads
         .route("/api/threads", get(threads::list_threads))
         .route("/api/threads/{id}", get(threads::get_thread))
-        // Diagnostics middleware — appends _diagnostics to all JSON responses
+        // Search
+        .route("/api/search", get(search::search))
+        // Diagnostics middleware
         .layer(middleware::from_fn_with_state(
             state.clone(),
             diagnostics::diagnostics_middleware,

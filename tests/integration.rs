@@ -499,3 +499,82 @@ async fn test_diagnostics_in_response() {
     assert_eq!(diag["pending_replies"][0]["subject"], "Urgent");
     assert!(diag["inbox_hint"].is_string());
 }
+
+#[tokio::test]
+async fn test_search_endpoint() {
+    let (base, client) = spawn_server().await;
+
+    let sender: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sender"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let recipient: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "recipient"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let sender_token = sender["bearerToken"].as_str().unwrap();
+    let recipient_token = recipient["bearerToken"].as_str().unwrap();
+    let recipient_id = recipient["id"].as_str().unwrap();
+
+    // Send two different messages
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Deployment success",
+            "body": "Production deploy completed"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(sender_token)
+        .json(&json!({
+            "to": [recipient_id],
+            "subject": "Code review",
+            "body": "Please review PR #42"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // Search for "deploy"
+    let results: Value = client
+        .get(format!("{base}/api/search?q=deploy"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(results["resultSizeEstimate"], 1);
+    assert_eq!(results["messages"][0]["subject"], "Deployment success");
+
+    // Search for "review"
+    let results: Value = client
+        .get(format!("{base}/api/search?q=review"))
+        .bearer_auth(recipient_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(results["resultSizeEstimate"], 1);
+    assert_eq!(results["messages"][0]["subject"], "Code review");
+}

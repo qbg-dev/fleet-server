@@ -5,6 +5,7 @@ use axum::{
 use crate::error::ApiError;
 use crate::storage::models::Account;
 use crate::storage::sqlite::SqliteDataStore;
+use crate::storage::fts::SqliteSearchStore;
 use crate::storage::DataStore;
 
 /// Authenticated account extracted from Bearer token.
@@ -45,4 +46,5 @@ impl FromRequestParts<AppState> for AuthAccount {
 #[derive(Clone)]
 pub struct AppState {
     pub store: SqliteDataStore,
+    pub search: SqliteSearchStore,
 }
