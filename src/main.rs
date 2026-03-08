@@ -127,7 +127,7 @@ async fn cmd_accounts(config: config::Config) -> Result<(), Box<dyn std::error::
         return Ok(());
     }
 
-    println!("{:<36}  {:<20}  {:<20}  {:<6}  {}", "ID", "NAME", "DISPLAY", "ACTIVE", "CREATED");
+    println!("{:<36}  {:<20}  {:<20}  {:<6}  CREATED", "ID", "NAME", "DISPLAY", "ACTIVE");
     println!("{}", "-".repeat(110));
     for a in &accounts {
         println!(

@@ -711,7 +711,7 @@ async fn test_mailing_lists() {
 async fn test_webhook_git_commit() {
     let (base, client) = spawn_server().await;
 
-    let author: Value = client
+    let _author: Value = client
         .post(format!("{base}/api/accounts"))
         .json(&json!({"name": "developer"}))
         .send().await.unwrap().json().await.unwrap();
