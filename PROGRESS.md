@@ -31,10 +31,11 @@
 | POST | /api/lists/:id/unsubscribe | Unsubscribe |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 102 tests, all passing
+## Test Summary: 103 tests, all passing
 - 33 unit tests (storage, search, parser, filter, blob, tmux)
 - 28 integration tests (HTTP API + conformance + edge cases)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
+- 1 performance benchmark (send, list, get, search, labels)
 - Duplicated across lib and bin crate targets
 
 ## Release Binary: 5.1MB (stripped, thin LTO)
@@ -109,9 +110,13 @@
 - Proper error handling: parse errors, method not found, unknown tools, missing args
 - 8 new tests: protocol, tool listing, notifications, error cases
 - 102 tests (33 unit + 28 integration + 8 MCP)
+- Performance benchmark: all hot paths under 10ms target
+  - send_message: ~500µs, list_messages: ~940µs, get_message: ~430µs
+  - search: ~1.1ms, list_labels: ~590µs
+- 103 tests (33 unit + 28 integration + 8 MCP + 1 bench)
 
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper
-- [ ] Performance profiling
-- [ ] Background OVERDUE labeling
+- [x] Performance profiling (all ops <10ms, see Cycle 6 benchmarks)
+- [x] Background OVERDUE labeling (already implemented in Cycle 2-3)
 - [x] Mailing list fan-out on send
