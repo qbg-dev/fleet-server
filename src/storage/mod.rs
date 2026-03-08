@@ -51,6 +51,9 @@ pub trait DataStore: Send + Sync + 'static {
     // Diagnostics
     async fn get_unread_count(&self, account_id: &str) -> Result<u32, StorageError>;
     async fn get_pending_replies(&self, account_id: &str) -> Result<Vec<PendingReply>, StorageError>;
+
+    // Background
+    async fn label_overdue_messages(&self) -> Result<u32, StorageError>;
 }
 
 /// Content-addressed blob storage

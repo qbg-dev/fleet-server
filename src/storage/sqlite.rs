@@ -1030,6 +1030,48 @@ impl DataStore for SqliteDataStore {
             .await
             .map_err(StorageError::from)
     }
+
+    async fn label_overdue_messages(&self) -> Result<u32, StorageError> {
+        self.db
+            .call(move |conn| {
+                let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+                // Find messages with reply_by in the past that don't have OVERDUE label yet
+                let mut stmt = conn.prepare(
+                    "SELECT DISTINCT m.id, mr.account_id
+                     FROM messages m
+                     JOIN message_recipients mr ON m.id = mr.message_id
+                     WHERE m.reply_requested = 1
+                     AND m.reply_by < ?1
+                     AND NOT EXISTS (
+                         SELECT 1 FROM messages reply
+                         WHERE reply.in_reply_to = m.id AND reply.from_account = mr.account_id
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM message_labels ml
+                         WHERE ml.message_id = m.id AND ml.account_id = mr.account_id AND ml.label = 'OVERDUE'
+                     )"
+                )?;
+
+                let overdue: Vec<(String, String)> = stmt
+                    .query_map(rusqlite::params![now], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                let count = overdue.len() as u32;
+                for (msg_id, account_id) in &overdue {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'OVERDUE')",
+                        rusqlite::params![msg_id, account_id],
+                    )?;
+                }
+
+                Ok(count)
+            })
+            .await
+            .map_err(StorageError::from)
+    }
 }
 
 fn row_to_account(row: &rusqlite::Row) -> rusqlite::Result<Account> {
@@ -1437,5 +1479,46 @@ mod tests {
             .unwrap();
         assert!(compressed, "body should be marked as compressed");
         assert!(stored_body.len() < large_body.len(), "stored body should be smaller than original");
+    }
+
+    #[tokio::test]
+    async fn test_label_overdue_messages() {
+        let store = test_store().await;
+        let sender = store.create_account("sender", None).await.unwrap();
+        let recipient = store.create_account("recipient", None).await.unwrap();
+
+        // Message with past deadline
+        let msg = NewMessage {
+            from_account: sender.id.clone(),
+            to: vec![recipient.id.clone()],
+            subject: "Overdue task".to_string(),
+            body: "Needs reply".to_string(),
+            reply_by: Some("2020-01-01T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+        let sent = store.insert_message(msg).await.unwrap();
+
+        // Message with future deadline (should NOT be labeled)
+        let msg2 = NewMessage {
+            from_account: sender.id.clone(),
+            to: vec![recipient.id.clone()],
+            subject: "Future task".to_string(),
+            body: "Not urgent".to_string(),
+            reply_by: Some("2099-01-01T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+        store.insert_message(msg2).await.unwrap();
+
+        // Run overdue check
+        let labeled = store.label_overdue_messages().await.unwrap();
+        assert_eq!(labeled, 1);
+
+        // Verify OVERDUE label was added
+        let labels = store.get_labels(&sent.id, &recipient.id).await.unwrap();
+        assert!(labels.contains(&"OVERDUE".to_string()));
+
+        // Running again should find 0 (already labeled)
+        let labeled2 = store.label_overdue_messages().await.unwrap();
+        assert_eq!(labeled2, 0);
     }
 }

@@ -37,6 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    // Spawn background tasks
+    background::deadlines::spawn_overdue_checker(storage::sqlite::SqliteDataStore::new(db.clone()));
+
     // Build router
     let app = api::router(db.clone(), &config);
 
