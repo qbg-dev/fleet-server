@@ -1073,7 +1073,7 @@ fn decompress_body(stored_body: &str, compressed: bool) -> String {
 
 fn make_snippet(body: &str) -> String {
     let s: String = body.chars().take(200).collect();
-    if body.len() > 200 {
+    if body.chars().count() > 200 {
         format!("{s}...")
     } else {
         s
@@ -1698,5 +1698,59 @@ mod tests {
         assert_eq!(accounts[0].name, "alpha");
         assert_eq!(accounts[1].name, "beta");
         assert_eq!(accounts[2].name, "gamma");
+    }
+
+    // Property-based tests
+    use proptest::prelude::*;
+
+    proptest! {
+        /// compress_body → decompress_body is identity for all valid UTF-8 strings.
+        #[test]
+        fn compress_decompress_roundtrip(body in "\\PC{0,2000}") {
+            let (stored, compressed) = compress_body(&body).unwrap();
+            let recovered = decompress_body(&stored, compressed);
+            prop_assert_eq!(&recovered, &body);
+        }
+
+        /// Bodies ≤ 512 bytes are never compressed.
+        #[test]
+        fn short_bodies_not_compressed(body in "\\PC{0,512}") {
+            let (stored, compressed) = compress_body(&body).unwrap();
+            if body.len() <= 512 {
+                prop_assert!(!compressed);
+                prop_assert_eq!(&stored, &body);
+            }
+        }
+
+        /// Bodies > 512 bytes are always compressed.
+        #[test]
+        fn long_bodies_always_compressed(body in "\\PC{513,2000}") {
+            let (_, compressed) = compress_body(&body).unwrap();
+            prop_assert!(compressed);
+        }
+
+        /// make_snippet never exceeds 200 chars + "..." (203 chars).
+        #[test]
+        fn snippet_length_bounded(body in "\\PC{0,1000}") {
+            let snippet = make_snippet(&body);
+            prop_assert!(snippet.chars().count() <= 203);
+        }
+
+        /// Short bodies produce exact snippets (no truncation).
+        #[test]
+        fn snippet_preserves_short_body(body in "\\PC{0,200}") {
+            let snippet = make_snippet(&body);
+            if body.chars().count() <= 200 {
+                prop_assert_eq!(&snippet, &body);
+            }
+        }
+
+        /// Long body snippets end with "...".
+        #[test]
+        fn snippet_truncation_has_ellipsis(body in "\\PC{250,1000}") {
+            let snippet = make_snippet(&body);
+            prop_assert!(snippet.ends_with("..."));
+            prop_assert_eq!(snippet.chars().count(), 203);
+        }
     }
 }

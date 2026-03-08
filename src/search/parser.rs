@@ -157,4 +157,68 @@ mod tests {
         let q = SearchQuery::parse("from:agent label:INBOX");
         assert_eq!(q.fts_query(), None);
     }
+
+    // Property-based tests
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Any string input must parse without panicking.
+        #[test]
+        fn parse_never_panics(input in "\\PC{0,500}") {
+            let _ = SearchQuery::parse(&input);
+        }
+
+        /// Parsing always returns a SearchQuery (never errors).
+        #[test]
+        fn parse_always_returns_terms_or_empty(input in "\\PC{0,200}") {
+            let q = SearchQuery::parse(&input);
+            // terms may be empty, that's fine
+            for term in &q.terms {
+                match term {
+                    SearchTerm::From(v) | SearchTerm::To(v) | SearchTerm::Label(v)
+                    | SearchTerm::Before(v) | SearchTerm::After(v) | SearchTerm::Text(v) => {
+                        prop_assert!(!v.is_empty() || matches!(term, SearchTerm::Text(_)));
+                    }
+                    SearchTerm::HasAttachment => {}
+                }
+            }
+        }
+
+        /// Empty/whitespace input produces no terms.
+        #[test]
+        fn whitespace_only_produces_empty(input in "[ \t\n\r]{0,50}") {
+            let q = SearchQuery::parse(&input);
+            prop_assert!(q.terms.is_empty());
+        }
+
+        /// Operators always extract the value after the colon.
+        #[test]
+        fn from_operator_extracts_value(val in "[a-z0-9_-]{1,30}") {
+            let input = format!("from:{val}");
+            let q = SearchQuery::parse(&input);
+            prop_assert_eq!(q.terms.len(), 1);
+            prop_assert_eq!(&q.terms[0], &SearchTerm::From(val));
+        }
+
+        /// label: values are uppercased.
+        #[test]
+        fn label_is_uppercased(val in "[a-zA-Z]{1,20}") {
+            let input = format!("label:{val}");
+            let q = SearchQuery::parse(&input);
+            prop_assert_eq!(q.terms.len(), 1);
+            prop_assert_eq!(&q.terms[0], &SearchTerm::Label(val.to_uppercase()));
+        }
+
+        /// fts_query only includes Text terms.
+        #[test]
+        fn fts_query_only_text_terms(input in "\\PC{0,200}") {
+            let q = SearchQuery::parse(&input);
+            let text_count = q.terms.iter().filter(|t| matches!(t, SearchTerm::Text(_))).count();
+            if text_count == 0 {
+                prop_assert!(q.fts_query().is_none());
+            } else {
+                prop_assert!(q.fts_query().is_some());
+            }
+        }
+    }
 }

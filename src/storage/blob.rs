@@ -153,4 +153,58 @@ mod tests {
         let meta = store.store_blob(b"test").await.unwrap();
         assert!(store.blob_exists(&meta.hash).await.unwrap());
     }
+
+    // Property-based tests
+    use proptest::prelude::*;
+
+    proptest! {
+        /// store → get is identity for all byte sequences.
+        #[test]
+        fn blob_store_get_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..8192)) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let config = test_config();
+                let store = FsBlobStore::new(&config);
+
+                let meta = store.store_blob(&data).await.unwrap();
+                let fetched = store.get_blob(&meta.hash).await.unwrap();
+                assert_eq!(fetched, data);
+            });
+        }
+
+        /// Same data always produces the same hash (content-addressed).
+        #[test]
+        fn blob_deterministic_hash(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+            let hash1 = hex_sha256(&data);
+            let hash2 = hex_sha256(&data);
+            prop_assert_eq!(hash1, hash2);
+        }
+
+        /// Different data (with high probability) produces different hashes.
+        #[test]
+        fn blob_different_data_different_hash(
+            a in proptest::collection::vec(any::<u8>(), 1..100),
+            b in proptest::collection::vec(any::<u8>(), 1..100),
+        ) {
+            if a != b {
+                let ha = hex_sha256(&a);
+                let hb = hex_sha256(&b);
+                prop_assert_ne!(ha, hb);
+            }
+        }
+
+        /// Blob metadata size matches input size.
+        #[test]
+        fn blob_meta_size_matches(data in proptest::collection::vec(any::<u8>(), 0..8192)) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let config = test_config();
+                let store = FsBlobStore::new(&config);
+
+                let meta = store.store_blob(&data).await.unwrap();
+                assert_eq!(meta.size as usize, data.len());
+                assert_eq!(meta.compressed, data.len() > 4096);
+            });
+        }
+    }
 }
