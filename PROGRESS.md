@@ -30,9 +30,9 @@
 | POST | /api/lists/:id/unsubscribe | Unsubscribe |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 73 tests, all passing
-- 29 unit tests (storage, search, parser, filter, blob)
-- 15 integration tests (HTTP API)
+## Test Summary: 76 tests, all passing
+- 30 unit tests (storage, search, parser, filter, blob)
+- 16 integration tests (HTTP API)
 - Duplicated across lib and bin crate targets
 
 ## Release Binary: 5.1MB (stripped, thin LTO)
@@ -56,7 +56,13 @@
 - Recycle readiness endpoint
 - Content-addressed blob store with zstd compression
 - mail-hook.sh updated to use webhook endpoint
-- Total: 22 endpoints, 73 tests
+- Total: 22 endpoints, 76 tests
+
+### Cycle 3 — Phase 5-6 completion (2026-03-08)
+- Attach blobs to messages on send (attachments field + GET response)
+- zstd compression on message bodies > 512 bytes (base64-encoded in DB)
+- Auto-provision accounts from worker-fleet registry.json
+- 76 tests (30 unit + 16 integration)
 
 ## ROADMAP Status
 
@@ -68,14 +74,14 @@
 - [x] Blob store (SHA-256, zstd >4KB, content-addressed, dedup)
 - [x] Upload blob (POST /api/blobs)
 - [x] Download blob (GET /api/blobs/:hash)
-- [ ] Attach blobs to messages on send (link via attachments table)
+- [x] Attach blobs to messages on send
 - [ ] tmux push notification (batch, dead pane detection)
 
-### Phase 6: Registry Integration + Polish — PARTIALLY DONE
+### Phase 6: Registry Integration + Polish — MOSTLY COMPLETE ✓
 - [x] Recycle readiness endpoint
 - [x] mail-hook.sh script
-- [ ] Auto-provision from registry.json
-- [ ] Compression: zstd on message bodies >512 bytes
+- [x] Auto-provision from registry.json
+- [x] Compression: zstd on message bodies >512 bytes
 - [ ] End-to-end conformance tests
 
 ### Phase 7+: Continuous Polish
