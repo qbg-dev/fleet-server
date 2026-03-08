@@ -38,48 +38,42 @@ mkdir -p /tmp/bms-dogfood
 BORING_MAIL_BIND=127.0.0.1:8025 BORING_MAIL_DATA=/tmp/bms-dogfood ./target/release/boring-mail serve &
 
 # Register an account
-curl -s -X POST http://127.0.0.1:8025/api/accounts \
-  -H "Content-Type: application/json" \
-  -d '{"name":"my-agent"}' | jq .
-# Save the bearerToken from the response
+scripts/bms-mail register my-agent
+# Save the bearerToken from the response as BMS_TOKEN
 ```
 
-### Common Operations
+### CLI (preferred — use this, not raw curl)
+
+`scripts/bms-mail` is a zero-dependency shell wrapper. Set `BMS_TOKEN` and go:
+
+```bash
+export BMS_TOKEN=<your-bearer-token>      # required
+export BMS_URL=http://127.0.0.1:8025      # optional, this is the default
+
+scripts/bms-mail send <to-id> "Subject" "Body"          # send message
+scripts/bms-mail send <to-id> "RE: Subject" "Reply" <thread-id> <in-reply-to>  # reply
+scripts/bms-mail inbox                                    # list INBOX
+scripts/bms-mail inbox UNREAD                             # list by label
+scripts/bms-mail read <msg-id>                            # read message (removes UNREAD)
+scripts/bms-mail thread <thread-id>                       # get full thread
+scripts/bms-mail search "keyword"                         # FTS search
+scripts/bms-mail labels                                   # list labels with counts
+scripts/bms-mail modify <msg-id> +STARRED -UNREAD         # add/remove labels
+scripts/bms-mail health                                   # server health
+scripts/bms-mail help                                     # full usage
+```
+
+### Raw curl (only if CLI doesn't cover your case)
 ```bash
 BMS=http://127.0.0.1:8025
 TOKEN=<your-bearer-token>
 
-# Send a message
 curl -s -X POST "$BMS/api/messages/send" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"to":["<recipient-id>"],"subject":"Hello","body":"Message body"}'
+  -d '{"to":["<id>"],"subject":"Hello","body":"Body"}'
 
-# Read inbox
 curl -s "$BMS/api/messages?label=INBOX" -H "Authorization: Bearer $TOKEN"
-
-# Read a specific message (auto-removes UNREAD)
-curl -s "$BMS/api/messages/<msg-id>" -H "Authorization: Bearer $TOKEN"
-
-# Reply in a thread
-curl -s -X POST "$BMS/api/messages/send" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"to":["<recipient-id>"],"subject":"RE: Hello","body":"Reply","thread_id":"<thread-id>","in_reply_to":"<msg-id>"}'
-
-# Search messages
-curl -s "$BMS/api/search?q=keyword" -H "Authorization: Bearer $TOKEN"
-
-# List labels with counts
-curl -s "$BMS/api/labels" -H "Authorization: Bearer $TOKEN"
-
-# Modify labels (add STARRED, remove UNREAD)
-curl -s -X POST "$BMS/api/messages/<msg-id>/modify" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"addLabelIds":["STARRED"],"removeLabelIds":["UNREAD"]}'
-
-# List threads
 curl -s "$BMS/api/threads?label=INBOX" -H "Authorization: Bearer $TOKEN"
 ```
 

@@ -1,0 +1,80 @@
+#!/bin/bash
+# bms-mail — dead-simple mail CLI for agents
+# Usage: bms-mail <command> [args]
+#
+# Env: BMS_URL (default http://127.0.0.1:8025), BMS_TOKEN (required)
+
+set -euo pipefail
+
+URL="${BMS_URL:-http://127.0.0.1:8025}"
+TOKEN="${BMS_TOKEN:?Set BMS_TOKEN to your bearer token}"
+
+api() { curl -sf -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" "$@"; }
+
+case "${1:-help}" in
+  register)
+    # bms-mail register <name>
+    curl -sf -X POST "$URL/api/accounts" -H "Content-Type: application/json" \
+      -d "{\"name\":\"$2\"}"
+    ;;
+  send)
+    # bms-mail send <to-id> <subject> <body> [thread_id] [in_reply_to]
+    body="{\"to\":[\"$2\"],\"subject\":\"$3\",\"body\":\"$4\""
+    [ -n "${5:-}" ] && body="$body,\"thread_id\":\"$5\""
+    [ -n "${6:-}" ] && body="$body,\"in_reply_to\":\"$6\""
+    body="$body}"
+    api -X POST "$URL/api/messages/send" -d "$body"
+    ;;
+  inbox)
+    # bms-mail inbox [label]
+    api "$URL/api/messages?label=${2:-INBOX}"
+    ;;
+  read)
+    # bms-mail read <message-id>
+    api "$URL/api/messages/$2"
+    ;;
+  thread)
+    # bms-mail thread <thread-id>
+    api "$URL/api/threads/$2"
+    ;;
+  search)
+    # bms-mail search <query>
+    api "$URL/api/search?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$2'))")"
+    ;;
+  labels)
+    # bms-mail labels
+    api "$URL/api/labels"
+    ;;
+  modify)
+    # bms-mail modify <msg-id> +LABEL or -LABEL
+    mid="$2"; shift 2
+    add="[]"; rem="[]"
+    for arg in "$@"; do
+      case "$arg" in
+        +*) add="$(echo "$add" | sed "s/\]/\"${arg#+}\"]/" | sed 's/"\[/["/; s/""/","/g')" ;;
+        -*) rem="$(echo "$rem" | sed "s/\]/\"${arg#-}\"]/" | sed 's/"\[/["/; s/""/","/g')" ;;
+      esac
+    done
+    api -X POST "$URL/api/messages/$mid/modify" -d "{\"addLabelIds\":$add,\"removeLabelIds\":$rem}"
+    ;;
+  health)
+    curl -sf "$URL/health"
+    ;;
+  help|*)
+    cat <<'HELP'
+bms-mail — agent mail CLI
+
+  register <name>                    Register new account (returns token)
+  send <to> <subject> <body> [thd] [reply]  Send message
+  inbox [label]                      List messages (default: INBOX)
+  read <msg-id>                      Read message (removes UNREAD)
+  thread <thread-id>                 Get thread with all messages
+  search <query>                     Search messages
+  labels                             List labels with counts
+  modify <msg-id> +ADD -REMOVE       Add/remove labels
+  health                             Server health check
+
+Env: BMS_URL (default http://127.0.0.1:8025), BMS_TOKEN (required)
+HELP
+    ;;
+esac

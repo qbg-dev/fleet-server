@@ -57,3 +57,4 @@ cargo run      # start server on 0.0.0.0:8025
 - `_diagnostics` in every API response
 - **DOGFOOD EVERYTHING**
 - **Maintain CLAUDE.md mail server docs** — when endpoints change, tokens rotate, or new features ship, update the "Using the Mail Server" section in CLAUDE.md immediately. This is how new agents learn to use the product.
+- **Maintain `scripts/bms-mail` CLI** — keep it simple, agent-friendly, zero dependencies. Agents use the CLI, not raw curl. Saves tokens and prevents mistakes.
