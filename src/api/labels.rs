@@ -42,6 +42,14 @@ pub async fn create_label(
     State(state): State<AppState>,
     Json(req): Json<CreateLabelRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("label name cannot be empty".into()));
+    }
+    if name.len() > 256 {
+        return Err(ApiError::BadRequest("label name too long (max 256 chars)".into()));
+    }
+
     let label = state
         .store
         .create_label(&auth.0.id, &req.name)

@@ -32,9 +32,9 @@
 | GET | /api/analytics | System-wide + per-account stats |
 | POST | /api/webhooks/git-commit | Commit notification webhook |
 
-## Test Summary: 112 tests, all passing
+## Test Summary: 124 tests, all passing
 - 35 unit tests (storage, search, parser, filter, blob, tmux, analytics)
-- 29 integration tests (HTTP API + conformance + edge cases + analytics)
+- 41 integration tests (HTTP API + conformance + edge cases + analytics + hardening)
 - 8 MCP protocol tests (initialize, tools/list, ping, error handling)
 - 4 CLI tests (help, init, status, accounts)
 - 1 performance benchmark (send, list, get, search, labels)
@@ -134,6 +134,20 @@
 - 1 unit test + 1 integration test
 - 112 tests (35 unit + 29 integration + 8 MCP + 4 CLI + 1 bench)
 - 24 endpoints total
+
+### Cycle 9 — Edge case tests + input validation (2026-03-08)
+- Label name validation: reject empty, whitespace-only, and >256 char names (400 error)
+- 12 new edge case integration tests:
+  - System label deletion protection (INBOX, SENT, TRASH, UNREAD, STARRED)
+  - Empty/whitespace label name creation rejected
+  - Long label name rejected
+  - Nonexistent message GET/modify/trash/delete → 404
+  - Empty recipients → 400
+  - Nonexistent mailing list recipient → 400
+  - Duplicate account name → error
+  - Batch modify with empty IDs → 400
+  - Empty inbox pagination (null nextPageToken)
+- 124 tests (35 unit + 41 integration + 8 MCP + 4 CLI + 1 bench)
 
 ### Phase 7+: Continuous Polish
 - [x] MCP stdio wrapper

@@ -1588,3 +1588,224 @@ async fn test_analytics_endpoint() {
     assert_eq!(bob_stats["messagesReceived"], 1);
     assert_eq!(bob_stats["unreadCount"], 1);
 }
+
+// ===== Cycle 9: Edge case tests =====
+
+#[tokio::test]
+async fn test_delete_system_label_fails() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    // Attempt to delete system labels — should all return 404
+    for label in &["INBOX", "SENT", "TRASH", "UNREAD", "STARRED"] {
+        let resp = client
+            .delete(format!("{base}/api/labels/{label}"))
+            .bearer_auth(token)
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 404, "deleting system label {label} should return 404");
+    }
+}
+
+#[tokio::test]
+async fn test_create_empty_label_fails() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    // Empty name
+    let resp = client
+        .post(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .json(&json!({"name": ""}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+
+    // Whitespace-only name
+    let resp = client
+        .post(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .json(&json!({"name": "   "}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_get_nonexistent_message() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp = client
+        .get(format!("{base}/api/messages/nonexistent-id-12345"))
+        .bearer_auth(token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_modify_nonexistent_message() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp = client
+        .post(format!("{base}/api/messages/nonexistent-id/modify"))
+        .bearer_auth(token)
+        .json(&json!({"addLabelIds": ["STARRED"], "removeLabelIds": []}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_trash_nonexistent_message() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp = client
+        .post(format!("{base}/api/messages/nonexistent-id/trash"))
+        .bearer_auth(token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_delete_nonexistent_message() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp = client
+        .delete(format!("{base}/api/messages/nonexistent-id"))
+        .bearer_auth(token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_send_empty_recipients() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(token)
+        .json(&json!({"to": [], "subject": "Hi", "body": "Hello"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_send_to_nonexistent_mailing_list() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp = client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(token)
+        .json(&json!({"to": ["list:nonexistent"], "subject": "Hi", "body": "Hello"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_duplicate_account_name() {
+    let (base, client) = spawn_server().await;
+
+    // Create first account
+    let resp = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Try to create duplicate — should fail (not 200)
+    let resp = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap();
+    assert!(resp.status().is_client_error() || resp.status().is_server_error(),
+        "duplicate account should fail, got {}", resp.status());
+}
+
+#[tokio::test]
+async fn test_batch_modify_empty_ids() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp = client
+        .post(format!("{base}/api/messages/batchModify"))
+        .bearer_auth(token)
+        .json(&json!({"ids": [], "addLabelIds": ["STARRED"], "removeLabelIds": []}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_pagination_empty_inbox() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    // List with no messages
+    let inbox: Value = client
+        .get(format!("{base}/api/messages?label=INBOX"))
+        .bearer_auth(token)
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(inbox["messages"].as_array().unwrap().len(), 0);
+    assert!(inbox["nextPageToken"].is_null());
+}
+
+#[tokio::test]
+async fn test_label_long_name_rejected() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    // Name > 256 chars
+    let long_name = "a".repeat(257);
+    let resp = client
+        .post(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .json(&json!({"name": long_name}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 400);
+}
