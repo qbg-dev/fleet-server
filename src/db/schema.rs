@@ -12,6 +12,7 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             display_name TEXT,
+            bio TEXT,
             bearer_token TEXT NOT NULL UNIQUE,
             tmux_pane_id TEXT,
             active INTEGER NOT NULL DEFAULT 1,
@@ -122,6 +123,10 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         );
         ",
     )?;
+
+    // Migrations for existing databases
+    // SQLite ALTER TABLE ADD COLUMN is idempotent-safe: ignore "duplicate column" errors
+    let _ = conn.execute("ALTER TABLE accounts ADD COLUMN bio TEXT", []);
 
     // Seed system labels
     let system_labels = [

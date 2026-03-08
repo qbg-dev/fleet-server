@@ -19,9 +19,11 @@ impl DataStore for SqliteDataStore {
         &self,
         name: &str,
         display_name: Option<&str>,
+        bio: Option<&str>,
     ) -> Result<Account, StorageError> {
         let name = name.to_string();
         let display_name = display_name.map(|s| s.to_string());
+        let bio = bio.map(|s| s.to_string());
 
         self.db
             .call(move |conn| {
@@ -29,12 +31,12 @@ impl DataStore for SqliteDataStore {
                 let token = uuid::Uuid::new_v4().to_string();
 
                 conn.execute(
-                    "INSERT INTO accounts (id, name, display_name, bearer_token) VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![id, name, display_name, token],
+                    "INSERT INTO accounts (id, name, display_name, bio, bearer_token) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![id, name, display_name, bio, token],
                 )?;
 
                 let account = conn.query_row(
-                    "SELECT id, name, display_name, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?1",
+                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?1",
                     rusqlite::params![id],
                     row_to_account,
                 )?;
@@ -50,7 +52,7 @@ impl DataStore for SqliteDataStore {
         self.db
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT id, name, display_name, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?1",
+                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?1",
                     rusqlite::params![id],
                     row_to_account,
                 )
@@ -70,7 +72,7 @@ impl DataStore for SqliteDataStore {
         self.db
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT id, name, display_name, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE name = ?1",
+                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE name = ?1",
                     rusqlite::params![name],
                     row_to_account,
                 )
@@ -90,7 +92,7 @@ impl DataStore for SqliteDataStore {
         self.db
             .call(move |conn| {
                 conn.query_row(
-                    "SELECT id, name, display_name, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE bearer_token = ?1",
+                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE bearer_token = ?1",
                     rusqlite::params![token],
                     row_to_account,
                 )
@@ -109,7 +111,7 @@ impl DataStore for SqliteDataStore {
         self.db
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, display_name, bearer_token, tmux_pane_id, active, created_at FROM accounts ORDER BY created_at",
+                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts ORDER BY created_at",
                 )?;
                 let accounts = stmt
                     .query_map([], row_to_account)?
@@ -118,6 +120,37 @@ impl DataStore for SqliteDataStore {
             })
             .await
             .map_err(StorageError::from)
+    }
+
+    async fn update_profile(
+        &self,
+        account_id: &str,
+        display_name: Option<&str>,
+        bio: Option<&str>,
+    ) -> Result<Account, StorageError> {
+        let account_id = account_id.to_string();
+        let display_name = display_name.map(|s| s.to_string());
+        let bio = bio.map(|s| s.to_string());
+        self.db
+            .call(move |conn| {
+                let rows = conn.execute(
+                    "UPDATE accounts SET display_name = COALESCE(?1, display_name), bio = COALESCE(?2, bio) WHERE id = ?3",
+                    rusqlite::params![display_name, bio, account_id],
+                )?;
+                if rows == 0 {
+                    return Err(tokio_rusqlite::Error::Other(Box::new(
+                        StorageError::NotFound(format!("account {account_id}")),
+                    )));
+                }
+                conn.query_row(
+                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?1",
+                    rusqlite::params![account_id],
+                    row_to_account,
+                )
+                .map_err(|e| tokio_rusqlite::Error::Other(Box::new(StorageError::Database(e.into()))))
+            })
+            .await
+            .map_err(storage_err_from_tokio)
     }
 
     async fn update_pane(
@@ -922,10 +955,11 @@ fn row_to_account(row: &rusqlite::Row) -> rusqlite::Result<Account> {
         id: row.get(0)?,
         name: row.get(1)?,
         display_name: row.get(2)?,
-        bearer_token: row.get(3)?,
-        tmux_pane_id: row.get(4)?,
-        active: row.get::<_, i32>(5)? != 0,
-        created_at: row.get(6)?,
+        bio: row.get(3)?,
+        bearer_token: row.get(4)?,
+        tmux_pane_id: row.get(5)?,
+        active: row.get::<_, i32>(6)? != 0,
+        created_at: row.get(7)?,
     })
 }
 
@@ -1230,7 +1264,7 @@ mod tests {
     async fn test_create_and_get_account() {
         let store = test_store().await;
 
-        let account = store.create_account("agent-1", Some("Agent One")).await.unwrap();
+        let account = store.create_account("agent-1", Some("Agent One"), None).await.unwrap();
         assert_eq!(account.name, "agent-1");
         assert_eq!(account.display_name, Some("Agent One".to_string()));
         assert!(account.active);
@@ -1259,15 +1293,15 @@ mod tests {
     #[tokio::test]
     async fn test_duplicate_account_name() {
         let store = test_store().await;
-        store.create_account("agent-1", None).await.unwrap();
-        let result = store.create_account("agent-1", None).await;
+        store.create_account("agent-1", None, None).await.unwrap();
+        let result = store.create_account("agent-1", None, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_update_pane() {
         let store = test_store().await;
-        let account = store.create_account("agent-1", None).await.unwrap();
+        let account = store.create_account("agent-1", None, None).await.unwrap();
         assert!(account.tmux_pane_id.is_none());
 
         store.update_pane(&account.id, "%42").await.unwrap();
@@ -1278,8 +1312,8 @@ mod tests {
     #[tokio::test]
     async fn test_send_and_get_message() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         let msg = NewMessage {
             from_account: sender.id.clone(),
@@ -1309,8 +1343,8 @@ mod tests {
     #[tokio::test]
     async fn test_message_labels_auto_assignment() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         let msg = NewMessage {
             from_account: sender.id.clone(),
@@ -1340,8 +1374,8 @@ mod tests {
     #[tokio::test]
     async fn test_list_messages_by_label() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         // Send 3 messages
         for i in 0..3 {
@@ -1372,8 +1406,8 @@ mod tests {
     #[tokio::test]
     async fn test_modify_labels() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         let msg = NewMessage {
             from_account: sender.id.clone(),
@@ -1402,8 +1436,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete_message() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         let msg = NewMessage {
             from_account: sender.id.clone(),
@@ -1427,8 +1461,8 @@ mod tests {
     #[tokio::test]
     async fn test_unread_count() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         // Send 2 messages
         for i in 0..2 {
@@ -1458,8 +1492,8 @@ mod tests {
     #[tokio::test]
     async fn test_thread_creation_and_get() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         let msg = NewMessage {
             from_account: sender.id.clone(),
@@ -1502,8 +1536,8 @@ mod tests {
     #[tokio::test]
     async fn test_pending_replies() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         let msg = NewMessage {
             from_account: sender.id.clone(),
@@ -1527,8 +1561,8 @@ mod tests {
     #[tokio::test]
     async fn test_body_compression() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         // Create a body > 512 bytes that should be compressed
         let large_body = "x".repeat(1000);
@@ -1573,8 +1607,8 @@ mod tests {
     #[tokio::test]
     async fn test_label_overdue_messages() {
         let store = test_store().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         // Message with past deadline
         let msg = NewMessage {
@@ -1623,8 +1657,8 @@ mod tests {
         assert!(stats.per_account.is_empty());
 
         // Create accounts and send messages
-        let alice = store.create_account("alice", None).await.unwrap();
-        let bob = store.create_account("bob", None).await.unwrap();
+        let alice = store.create_account("alice", None, None).await.unwrap();
+        let bob = store.create_account("bob", None, None).await.unwrap();
 
         store.insert_message(NewMessage {
             from_account: alice.id.clone(),
@@ -1677,9 +1711,9 @@ mod tests {
         assert!(accounts.is_empty());
 
         // Create accounts
-        store.create_account("alpha", Some("Alpha Agent")).await.unwrap();
-        store.create_account("beta", None).await.unwrap();
-        store.create_account("gamma", Some("Gamma")).await.unwrap();
+        store.create_account("alpha", Some("Alpha Agent"), None).await.unwrap();
+        store.create_account("beta", None, None).await.unwrap();
+        store.create_account("gamma", Some("Gamma"), None).await.unwrap();
 
         let accounts = store.list_accounts().await.unwrap();
         assert_eq!(accounts.len(), 3);

@@ -115,8 +115,8 @@ mod tests {
     #[tokio::test]
     async fn test_fts_search() {
         let (store, search) = setup().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         store.insert_message(NewMessage {
             from_account: sender.id.clone(),
@@ -144,7 +144,7 @@ mod tests {
         let results = search.search(&recipient.id, "bug", 10).await.unwrap();
         assert_eq!(results.len(), 1);
 
-        let other = store.create_account("other", None).await.unwrap();
+        let other = store.create_account("other", None, None).await.unwrap();
         let results = search.search(&other.id, "deploy", 10).await.unwrap();
         assert_eq!(results.len(), 0);
     }
@@ -152,9 +152,9 @@ mod tests {
     #[tokio::test]
     async fn test_advanced_search_from() {
         let (store, search) = setup().await;
-        let alice = store.create_account("alice", None).await.unwrap();
-        let bob = store.create_account("bob", None).await.unwrap();
-        let charlie = store.create_account("charlie", None).await.unwrap();
+        let alice = store.create_account("alice", None, None).await.unwrap();
+        let bob = store.create_account("bob", None, None).await.unwrap();
+        let charlie = store.create_account("charlie", None, None).await.unwrap();
 
         // Alice sends to Charlie
         store.insert_message(NewMessage {
@@ -190,8 +190,8 @@ mod tests {
     #[tokio::test]
     async fn test_advanced_search_label() {
         let (store, search) = setup().await;
-        let sender = store.create_account("sender", None).await.unwrap();
-        let recipient = store.create_account("recipient", None).await.unwrap();
+        let sender = store.create_account("sender", None, None).await.unwrap();
+        let recipient = store.create_account("recipient", None, None).await.unwrap();
 
         let msg = store.insert_message(NewMessage {
             from_account: sender.id.clone(),

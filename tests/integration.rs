@@ -2793,3 +2793,112 @@ async fn test_create_label_saves_trimmed_name() {
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(resp["name"].as_str().unwrap(), "my-label");
 }
+
+// --- Directory + Profile Tests ---
+
+#[tokio::test]
+async fn test_directory_lists_all_accounts() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice", "bio": "Research agent specializing in web search"}))
+        .send().await.unwrap().json().await.unwrap();
+    let _bob: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob", "displayName": "Bob Builder", "bio": "Code review and testing"}))
+        .send().await.unwrap().json().await.unwrap();
+
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+
+    // Directory should list both accounts (without tokens!)
+    let dir: Value = client.get(format!("{base}/api/directory"))
+        .bearer_auth(alice_token)
+        .send().await.unwrap().json().await.unwrap();
+
+    let entries = dir["directory"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(dir["total"], 2);
+
+    // Should NOT contain bearer tokens
+    for entry in entries {
+        assert!(entry.get("bearerToken").is_none());
+        assert!(entry.get("tmuxPaneId").is_none());
+    }
+
+    // Should contain bio
+    let alice_entry = entries.iter().find(|e| e["name"] == "alice").unwrap();
+    assert_eq!(alice_entry["bio"].as_str().unwrap(), "Research agent specializing in web search");
+}
+
+#[tokio::test]
+async fn test_directory_search_filter() {
+    let (base, client) = spawn_server().await;
+
+    let alice: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice", "bio": "Research agent"}))
+        .send().await.unwrap().json().await.unwrap();
+    client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob", "bio": "Code reviewer"}))
+        .send().await.unwrap();
+
+    let token = alice["bearerToken"].as_str().unwrap();
+
+    // Search by name
+    let dir: Value = client.get(format!("{base}/api/directory?q=alice"))
+        .bearer_auth(token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(dir["total"], 1);
+    assert_eq!(dir["directory"][0]["name"], "alice");
+
+    // Search by bio keyword
+    let dir: Value = client.get(format!("{base}/api/directory?q=reviewer"))
+        .bearer_auth(token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(dir["total"], 1);
+    assert_eq!(dir["directory"][0]["name"], "bob");
+
+    // No match
+    let dir: Value = client.get(format!("{base}/api/directory?q=nonexistent"))
+        .bearer_auth(token).send().await.unwrap().json().await.unwrap();
+    assert_eq!(dir["total"], 0);
+}
+
+#[tokio::test]
+async fn test_update_profile() {
+    let (base, client) = spawn_server().await;
+
+    let user: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = user["bearerToken"].as_str().unwrap();
+
+    // Update bio
+    let resp: Value = client.put(format!("{base}/api/accounts/me"))
+        .bearer_auth(token)
+        .json(&json!({"bio": "I handle web research and fact-checking"}))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(resp["bio"].as_str().unwrap(), "I handle web research and fact-checking");
+    assert_eq!(resp["name"], "alice");
+
+    // Update display_name without changing bio
+    let resp: Value = client.put(format!("{base}/api/accounts/me"))
+        .bearer_auth(token)
+        .json(&json!({"displayName": "Alice Agent"}))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(resp["displayName"].as_str().unwrap(), "Alice Agent");
+    assert_eq!(resp["bio"].as_str().unwrap(), "I handle web research and fact-checking");
+}
+
+#[tokio::test]
+async fn test_create_account_with_bio() {
+    let (base, client) = spawn_server().await;
+
+    let resp: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({
+            "name": "research-bot",
+            "displayName": "Research Bot",
+            "bio": "Searches the web for relevant information"
+        }))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_eq!(resp["name"], "research-bot");
+    assert_eq!(resp["bio"].as_str().unwrap(), "Searches the web for relevant information");
+    assert!(resp.get("bearerToken").is_some());
+}

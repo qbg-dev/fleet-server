@@ -1,8 +1,9 @@
-use axum::{extract::{Path, State}, Json};
+use axum::{extract::{Path, Query, State}, Json};
 use crate::api::auth::{AppState, AuthAccount};
-use crate::api::models::{CreateAccountRequest, UpdatePaneRequest};
+use crate::api::models::{CreateAccountRequest, UpdatePaneRequest, UpdateProfileRequest};
 use crate::error::ApiError;
 use crate::storage::DataStore;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 /// POST /api/accounts — register a new account
@@ -20,7 +21,7 @@ pub async fn create_account(
 
     let account = state
         .store
-        .create_account(name, req.display_name.as_deref())
+        .create_account(name, req.display_name.as_deref(), req.bio.as_deref())
         .await
         .map_err(|e| {
             if e.to_string().contains("UNIQUE constraint") {
@@ -34,6 +35,7 @@ pub async fn create_account(
         "id": account.id,
         "name": account.name,
         "displayName": account.display_name,
+        "bio": account.bio,
         "bearerToken": account.bearer_token,
         "active": account.active,
         "createdAt": account.created_at,
@@ -101,22 +103,15 @@ pub async fn update_pane(
     })))
 }
 
-/// GET /api/accounts/:id — get account profile
-pub async fn get_account(
+/// PUT /api/accounts/me — update own profile (display_name, bio)
+pub async fn update_profile(
     auth: AuthAccount,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Json(req): Json<UpdateProfileRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let id = if id == "me" { auth.0.id.clone() } else { id };
-
-    // Only allow viewing own account
-    if id != auth.0.id {
-        return Err(ApiError::Forbidden);
-    }
-
     let account = state
         .store
-        .get_account_by_id(&id)
+        .update_profile(&auth.0.id, req.display_name.as_deref(), req.bio.as_deref())
         .await
         .map_err(ApiError::from)?;
 
@@ -124,8 +119,95 @@ pub async fn get_account(
         "id": account.id,
         "name": account.name,
         "displayName": account.display_name,
+        "bio": account.bio,
+        "active": account.active,
+        "createdAt": account.created_at,
+    })))
+}
+
+/// GET /api/accounts/me — shortcut for own profile
+pub async fn get_account_me(
+    auth: AuthAccount,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    get_account_by_id(&auth.0.id, &state).await
+}
+
+/// GET /api/accounts/:id — get account profile (own account only)
+pub async fn get_account(
+    auth: AuthAccount,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    // Only allow viewing own account
+    if id != auth.0.id {
+        return Err(ApiError::Forbidden);
+    }
+
+    get_account_by_id(&id, &state).await
+}
+
+async fn get_account_by_id(id: &str, state: &AppState) -> Result<Json<Value>, ApiError> {
+    let account = state
+        .store
+        .get_account_by_id(id)
+        .await
+        .map_err(ApiError::from)?;
+
+    Ok(Json(json!({
+        "id": account.id,
+        "name": account.name,
+        "displayName": account.display_name,
+        "bio": account.bio,
         "tmuxPaneId": account.tmux_pane_id,
         "active": account.active,
         "createdAt": account.created_at,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirectoryQuery {
+    pub q: Option<String>,
+}
+
+/// GET /api/directory — discover accounts (public info only, no tokens)
+pub async fn directory(
+    _auth: AuthAccount,
+    State(state): State<AppState>,
+    Query(q): Query<DirectoryQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let accounts = state
+        .store
+        .list_accounts()
+        .await
+        .map_err(ApiError::from)?;
+
+    let query = q.q.map(|s| s.to_lowercase());
+
+    let entries: Vec<Value> = accounts
+        .iter()
+        .filter(|a| {
+            if let Some(ref q) = query {
+                a.name.to_lowercase().contains(q)
+                    || a.display_name.as_ref().is_some_and(|d| d.to_lowercase().contains(q))
+                    || a.bio.as_ref().is_some_and(|b| b.to_lowercase().contains(q))
+            } else {
+                true
+            }
+        })
+        .map(|a| {
+            json!({
+                "id": a.id,
+                "name": a.name,
+                "displayName": a.display_name,
+                "bio": a.bio,
+                "active": a.active,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "directory": entries,
+        "total": entries.len(),
     })))
 }

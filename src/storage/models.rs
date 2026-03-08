@@ -9,6 +9,8 @@ pub struct Account {
     /// Unique short name (used in addressing, e.g. `agent-1`).
     pub name: String,
     pub display_name: Option<String>,
+    /// Free-text description of this account's role/capabilities.
+    pub bio: Option<String>,
     /// Bearer token for API authentication.
     pub bearer_token: String,
     /// tmux pane ID for push notifications (e.g. `%42`).

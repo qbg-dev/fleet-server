@@ -33,7 +33,7 @@ pub async fn provision_from_registry<D: DataStore>(
             }
             Err(_) => {
                 // Create new account
-                match store.create_account(&worker_name, Some(&worker_name)).await {
+                match store.create_account(&worker_name, Some(&worker_name), None).await {
                     Ok(account) => {
                         tracing::info!("provisioned mail account for worker: {}", worker_name);
                         updates.push((worker_name, account.bearer_token));

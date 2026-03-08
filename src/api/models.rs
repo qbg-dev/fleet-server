@@ -38,7 +38,16 @@ pub struct BatchModifyRequest {
 #[derive(Debug, Deserialize)]
 pub struct CreateAccountRequest {
     pub name: String,
+    #[serde(alias = "displayName")]
     pub display_name: Option<String>,
+    pub bio: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProfileRequest {
+    #[serde(alias = "displayName")]
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

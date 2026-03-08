@@ -19,11 +19,12 @@ use models::*;
 #[allow(async_fn_in_trait)]
 pub trait DataStore: Send + Sync + 'static {
     // Accounts
-    async fn create_account(&self, name: &str, display_name: Option<&str>) -> Result<Account, StorageError>;
+    async fn create_account(&self, name: &str, display_name: Option<&str>, bio: Option<&str>) -> Result<Account, StorageError>;
     async fn get_account_by_id(&self, id: &str) -> Result<Account, StorageError>;
     async fn get_account_by_name(&self, name: &str) -> Result<Account, StorageError>;
     async fn get_account_by_token(&self, token: &str) -> Result<Account, StorageError>;
     async fn list_accounts(&self) -> Result<Vec<Account>, StorageError>;
+    async fn update_profile(&self, account_id: &str, display_name: Option<&str>, bio: Option<&str>) -> Result<Account, StorageError>;
     async fn update_pane(&self, account_id: &str, pane_id: &str) -> Result<(), StorageError>;
 
     // Messages
