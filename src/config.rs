@@ -7,6 +7,7 @@ pub struct Config {
     pub db_path: PathBuf,
     pub blob_dir: PathBuf,
     pub admin_token: Option<String>,
+    pub registry_path: Option<PathBuf>,
 }
 
 impl Config {
@@ -27,6 +28,7 @@ impl Config {
             db_path,
             blob_dir,
             admin_token: std::env::var("BORING_MAIL_ADMIN_TOKEN").ok(),
+            registry_path: std::env::var("BORING_MAIL_REGISTRY").ok().map(PathBuf::from),
         }
     }
 }

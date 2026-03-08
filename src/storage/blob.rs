@@ -89,6 +89,7 @@ mod tests {
             db_path: tmp.path().join("mail.db"),
             blob_dir: tmp.path().join("blobs"),
             admin_token: None,
+            registry_path: None,
         }
     }
 

@@ -14,6 +14,7 @@ async fn spawn_server() -> (String, Client) {
         blob_dir: data_dir.join("blobs"),
         data_dir,
         admin_token: None,
+        registry_path: None,
     };
 
     let db = boring_mail::db::connection::setup(&config).await.unwrap();
