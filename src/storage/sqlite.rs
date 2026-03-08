@@ -837,50 +837,17 @@ impl DataStore for SqliteDataStore {
     async fn get_analytics(&self) -> Result<Analytics, StorageError> {
         self.db
             .call(move |conn| {
-                let total_accounts: u32 = conn.query_row(
-                    "SELECT COUNT(*) FROM accounts",
-                    [],
-                    |row| row.get(0),
-                )?;
-                let total_messages: u32 = conn.query_row(
-                    "SELECT COUNT(*) FROM messages",
-                    [],
-                    |row| row.get(0),
-                )?;
-                let total_threads: u32 = conn.query_row(
-                    "SELECT COUNT(*) FROM threads",
-                    [],
-                    |row| row.get(0),
-                )?;
-                let total_blobs: u32 = conn.query_row(
-                    "SELECT COUNT(*) FROM blobs",
-                    [],
-                    |row| row.get(0),
-                )?;
+                let (total_accounts, total_messages, total_threads, total_blobs) =
+                    conn.query_row(
+                        "SELECT (SELECT COUNT(*) FROM accounts),
+                                (SELECT COUNT(*) FROM messages),
+                                (SELECT COUNT(*) FROM threads),
+                                (SELECT COUNT(*) FROM blobs)",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )?;
 
-                let mut stmt = conn.prepare(
-                    "SELECT a.id, a.name,
-                        (SELECT COUNT(*) FROM messages m WHERE m.from_account = a.id) AS sent,
-                        (SELECT COUNT(DISTINCT mr.message_id) FROM message_recipients mr WHERE mr.account_id = a.id) AS received,
-                        (SELECT COUNT(DISTINCT m2.thread_id) FROM messages m2 WHERE m2.from_account = a.id AND m2.id = (SELECT MIN(m3.id) FROM messages m3 WHERE m3.thread_id = m2.thread_id)) AS threads_started,
-                        (SELECT COUNT(*) FROM message_labels ml WHERE ml.account_id = a.id AND ml.label = 'UNREAD') AS unread
-                     FROM accounts a
-                     ORDER BY a.name"
-                )?;
-
-                let per_account = stmt
-                    .query_map([], |row| {
-                        Ok(AccountStats {
-                            account_id: row.get(0)?,
-                            account_name: row.get(1)?,
-                            messages_sent: row.get(2)?,
-                            messages_received: row.get(3)?,
-                            threads_started: row.get(4)?,
-                            unread_count: row.get(5)?,
-                        })
-                    })?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                let per_account = query_per_account_stats(conn)?;
 
                 Ok(Analytics {
                     total_accounts,
@@ -893,6 +860,34 @@ impl DataStore for SqliteDataStore {
             .await
             .map_err(StorageError::from)
     }
+}
+
+fn query_per_account_stats(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<AccountStats>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT a.id, a.name,
+            (SELECT COUNT(*) FROM messages m WHERE m.from_account = a.id) AS sent,
+            (SELECT COUNT(DISTINCT mr.message_id) FROM message_recipients mr WHERE mr.account_id = a.id) AS received,
+            (SELECT COUNT(DISTINCT m2.thread_id) FROM messages m2 WHERE m2.from_account = a.id AND m2.id = (SELECT MIN(m3.id) FROM messages m3 WHERE m3.thread_id = m2.thread_id)) AS threads_started,
+            (SELECT COUNT(*) FROM message_labels ml WHERE ml.account_id = a.id AND ml.label = 'UNREAD') AS unread
+         FROM accounts a
+         ORDER BY a.name",
+    )?;
+    let stats = stmt
+        .query_map([], |row| {
+            Ok(AccountStats {
+                account_id: row.get(0)?,
+                account_name: row.get(1)?,
+                messages_sent: row.get(2)?,
+                messages_received: row.get(3)?,
+                threads_started: row.get(4)?,
+                unread_count: row.get(5)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(stats)
 }
 
 fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
