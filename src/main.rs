@@ -38,7 +38,7 @@ async fn cmd_serve(config: config::Config) -> Result<(), Box<dyn std::error::Err
 
     // Auto-provision from registry.json if configured
     if let Some(ref registry_path) = config.registry_path {
-        let store = storage::sqlite::SqliteDataStore::new(db.clone());
+        let store = storage::sqlite::DoltDataStore::new(db.clone());
         match service::provision::provision_from_registry(&store, registry_path).await {
             Ok(n) => {
                 if n > 0 {
@@ -50,7 +50,7 @@ async fn cmd_serve(config: config::Config) -> Result<(), Box<dyn std::error::Err
     }
 
     // Spawn background tasks
-    background::deadlines::spawn_overdue_checker(storage::sqlite::SqliteDataStore::new(db.clone()));
+    background::deadlines::spawn_overdue_checker(storage::sqlite::DoltDataStore::new(db.clone()));
 
     // Build router
     let app = api::router(db.clone(), &config);
@@ -94,7 +94,7 @@ async fn shutdown_signal() {
 async fn cmd_init(config: config::Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Initializing boring-mail at {:?}", config.data_dir);
     let _db = db::connection::setup(&config).await?;
-    println!("  Database: {:?}", config.db_path);
+    println!("  Database: {}", config.database_url);
     println!("  Blobs:    {:?}", config.blob_dir);
     println!("Ready.");
     Ok(())
@@ -103,28 +103,30 @@ async fn cmd_init(config: config::Config) -> Result<(), Box<dyn std::error::Erro
 async fn cmd_status(config: config::Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use storage::DataStore;
 
-    let db_exists = config.db_path.exists();
     println!("boring-mail status");
     println!("  Data dir: {:?}", config.data_dir);
-    println!("  Database: {:?} ({})", config.db_path, if db_exists { "exists" } else { "not found" });
+    println!("  Database: {}", config.database_url);
     println!("  Blob dir: {:?} ({})", config.blob_dir, if config.blob_dir.exists() { "exists" } else { "not found" });
     println!("  Bind:     {}", config.bind_addr);
 
-    if db_exists {
-        let db = db::connection::setup(&config).await?;
-        let store = storage::sqlite::SqliteDataStore::new(db.clone());
-        let accounts = store.list_accounts().await?;
-        let msg_count: i64 = db.call(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
-                .map_err(tokio_rusqlite::Error::from)
-        }).await?;
-        let thread_count: i64 = db.call(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM threads", [], |r| r.get(0))
-                .map_err(tokio_rusqlite::Error::from)
-        }).await?;
-        println!("  Accounts: {}", accounts.len());
-        println!("  Messages: {msg_count}");
-        println!("  Threads:  {thread_count}");
+    // Try connecting to the database
+    match db::connection::setup(&config).await {
+        Ok(db) => {
+            let store = storage::sqlite::DoltDataStore::new(db.clone());
+            let accounts = store.list_accounts().await?;
+            let msg_row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
+                .fetch_one(&db)
+                .await?;
+            let thread_row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM threads")
+                .fetch_one(&db)
+                .await?;
+            println!("  Accounts: {}", accounts.len());
+            println!("  Messages: {}", msg_row.0);
+            println!("  Threads:  {}", thread_row.0);
+        }
+        Err(e) => {
+            println!("  Database: not reachable ({})", e);
+        }
     }
 
     // Check if server is running
@@ -140,13 +142,8 @@ async fn cmd_status(config: config::Config) -> Result<(), Box<dyn std::error::Er
 async fn cmd_accounts(config: config::Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use storage::DataStore;
 
-    if !config.db_path.exists() {
-        eprintln!("Database not found at {:?}. Run `boring-mail init` first.", config.db_path);
-        std::process::exit(1);
-    }
-
     let db = db::connection::setup(&config).await?;
-    let store = storage::sqlite::SqliteDataStore::new(db);
+    let store = storage::sqlite::DoltDataStore::new(db);
     let accounts = store.list_accounts().await?;
 
     if accounts.is_empty() {

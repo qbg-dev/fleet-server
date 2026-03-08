@@ -25,7 +25,7 @@ use tower_http::request_id::{MakeRequestUuid, SetRequestIdLayer, PropagateReques
 use std::time::Duration;
 use crate::db::connection::DbPool;
 use crate::config::Config;
-use crate::storage::sqlite::SqliteDataStore;
+use crate::storage::sqlite::DoltDataStore;
 use crate::storage::fts::SqliteSearchStore;
 use crate::storage::blob::FsBlobStore;
 use auth::AppState;
@@ -33,7 +33,7 @@ use rate_limit::RateLimiter;
 
 pub fn router(db: DbPool, config: &Config) -> Router {
     let state = AppState {
-        store: SqliteDataStore::new(db.clone()),
+        store: DoltDataStore::new(db.clone()),
         search: SqliteSearchStore::new(db),
         blobs: FsBlobStore::new(config),
     };

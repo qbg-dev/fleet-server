@@ -56,7 +56,8 @@ pub async fn create_label(
         .create_label(&auth.0.id, &trimmed_name)
         .await
         .map_err(|e| {
-            if e.to_string().contains("UNIQUE constraint") {
+            let msg = e.to_string();
+            if msg.contains("UNIQUE constraint") || msg.contains("Duplicate entry") || msg.contains("duplicate unique key") {
                 ApiError::Conflict(format!("label already exists: {trimmed_name}"))
             } else {
                 ApiError::from(e)

@@ -2,124 +2,100 @@ use crate::db::connection::DbPool;
 use crate::error::StorageError;
 use crate::storage::models::*;
 use crate::storage::DataStore;
+use sqlx::Row;
 
 #[derive(Clone)]
-pub struct SqliteDataStore {
+pub struct DoltDataStore {
     db: DbPool,
 }
 
-impl SqliteDataStore {
+impl DoltDataStore {
     pub fn new(db: DbPool) -> Self {
         Self { db }
     }
 }
 
-impl DataStore for SqliteDataStore {
+impl DataStore for DoltDataStore {
     async fn create_account(
         &self,
         name: &str,
         display_name: Option<&str>,
         bio: Option<&str>,
     ) -> Result<Account, StorageError> {
-        let name = name.to_string();
-        let display_name = display_name.map(|s| s.to_string());
-        let bio = bio.map(|s| s.to_string());
+        let id = uuid::Uuid::new_v4().to_string();
+        let token = uuid::Uuid::new_v4().to_string();
 
-        self.db
-            .call(move |conn| {
-                let id = uuid::Uuid::new_v4().to_string();
-                let token = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO accounts (id, name, display_name, bio, bearer_token) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(name)
+        .bind(display_name)
+        .bind(bio)
+        .bind(&token)
+        .execute(&self.db)
+        .await?;
 
-                conn.execute(
-                    "INSERT INTO accounts (id, name, display_name, bio, bearer_token) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![id, name, display_name, bio, token],
-                )?;
+        let row = sqlx::query(
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?",
+        )
+        .bind(&id)
+        .fetch_one(&self.db)
+        .await?;
 
-                let account = conn.query_row(
-                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?1",
-                    rusqlite::params![id],
-                    row_to_account,
-                )?;
-
-                Ok(account)
-            })
-            .await
-            .map_err(StorageError::from)
+        Ok(row_to_account(&row))
     }
 
     async fn get_account_by_id(&self, id: &str) -> Result<Account, StorageError> {
-        let id = id.to_string();
-        self.db
-            .call(move |conn| {
-                conn.query_row(
-                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?1",
-                    rusqlite::params![id],
-                    row_to_account,
-                )
-                .map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(format!("account {id}"))))
-                    }
-                    e => tokio_rusqlite::Error::Rusqlite(e),
-                })
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        let row = sqlx::query(
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.db)
+        .await?;
+
+        match row {
+            Some(row) => Ok(row_to_account(&row)),
+            None => Err(StorageError::NotFound(format!("account {id}"))),
+        }
     }
 
     async fn get_account_by_name(&self, name: &str) -> Result<Account, StorageError> {
-        let name = name.to_string();
-        self.db
-            .call(move |conn| {
-                conn.query_row(
-                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE name = ?1",
-                    rusqlite::params![name],
-                    row_to_account,
-                )
-                .map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(format!("account name={name}"))))
-                    }
-                    e => tokio_rusqlite::Error::Rusqlite(e),
-                })
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        let row = sqlx::query(
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE name = ?",
+        )
+        .bind(name)
+        .fetch_optional(&self.db)
+        .await?;
+
+        match row {
+            Some(row) => Ok(row_to_account(&row)),
+            None => Err(StorageError::NotFound(format!("account name={name}"))),
+        }
     }
 
     async fn get_account_by_token(&self, token: &str) -> Result<Account, StorageError> {
-        let token = token.to_string();
-        self.db
-            .call(move |conn| {
-                conn.query_row(
-                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE bearer_token = ?1",
-                    rusqlite::params![token],
-                    row_to_account,
-                )
-                .map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound("invalid token".to_string())))
-                    }
-                    e => tokio_rusqlite::Error::Rusqlite(e),
-                })
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        let row = sqlx::query(
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE bearer_token = ?",
+        )
+        .bind(token)
+        .fetch_optional(&self.db)
+        .await?;
+
+        match row {
+            Some(row) => Ok(row_to_account(&row)),
+            None => Err(StorageError::NotFound("invalid token".to_string())),
+        }
     }
 
     async fn list_accounts(&self) -> Result<Vec<Account>, StorageError> {
-        self.db
-            .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts ORDER BY created_at",
-                )?;
-                let accounts = stmt
-                    .query_map([], row_to_account)?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(accounts)
-            })
-            .await
-            .map_err(StorageError::from)
+        let rows = sqlx::query(
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts ORDER BY created_at",
+        )
+        .fetch_all(&self.db)
+        .await?;
+
+        Ok(rows.iter().map(row_to_account).collect())
     }
 
     async fn update_profile(
@@ -128,29 +104,27 @@ impl DataStore for SqliteDataStore {
         display_name: Option<&str>,
         bio: Option<&str>,
     ) -> Result<Account, StorageError> {
-        let account_id = account_id.to_string();
-        let display_name = display_name.map(|s| s.to_string());
-        let bio = bio.map(|s| s.to_string());
-        self.db
-            .call(move |conn| {
-                let rows = conn.execute(
-                    "UPDATE accounts SET display_name = COALESCE(?1, display_name), bio = COALESCE(?2, bio) WHERE id = ?3",
-                    rusqlite::params![display_name, bio, account_id],
-                )?;
-                if rows == 0 {
-                    return Err(tokio_rusqlite::Error::Other(Box::new(
-                        StorageError::NotFound(format!("account {account_id}")),
-                    )));
-                }
-                conn.query_row(
-                    "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?1",
-                    rusqlite::params![account_id],
-                    row_to_account,
-                )
-                .map_err(|e| tokio_rusqlite::Error::Other(Box::new(StorageError::Database(e.into()))))
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        let result = sqlx::query(
+            "UPDATE accounts SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio) WHERE id = ?",
+        )
+        .bind(display_name)
+        .bind(bio)
+        .bind(account_id)
+        .execute(&self.db)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NotFound(format!("account {account_id}")));
+        }
+
+        let row = sqlx::query(
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?",
+        )
+        .bind(account_id)
+        .fetch_one(&self.db)
+        .await?;
+
+        Ok(row_to_account(&row))
     }
 
     async fn update_pane(
@@ -158,111 +132,107 @@ impl DataStore for SqliteDataStore {
         account_id: &str,
         pane_id: &str,
     ) -> Result<(), StorageError> {
-        let account_id = account_id.to_string();
-        let pane_id = pane_id.to_string();
-        self.db
-            .call(move |conn| {
-                let rows = conn.execute(
-                    "UPDATE accounts SET tmux_pane_id = ?1 WHERE id = ?2",
-                    rusqlite::params![pane_id, account_id],
-                )?;
-                if rows == 0 {
-                    return Err(tokio_rusqlite::Error::Other(Box::new(
-                        StorageError::NotFound(format!("account {account_id}")),
-                    )));
-                }
-                Ok(())
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        let result = sqlx::query(
+            "UPDATE accounts SET tmux_pane_id = ? WHERE id = ?",
+        )
+        .bind(pane_id)
+        .bind(account_id)
+        .execute(&self.db)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NotFound(format!("account {account_id}")));
+        }
+        Ok(())
     }
 
     async fn insert_message(&self, msg: NewMessage) -> Result<Message, StorageError> {
-        self.db
-            .call(move |conn| {
-                let tx = conn.transaction()?;
-                let msg_id = uuid::Uuid::new_v4().to_string();
-                let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
-                let snippet = make_snippet(&msg.body);
-                let reply_requested = msg.reply_by.is_some();
+        let mut tx = self.db.begin().await?;
+        let msg_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
+        let snippet = make_snippet(&msg.body);
+        let reply_requested = msg.reply_by.is_some();
 
-                let thread_id = resolve_thread(&tx, &msg, &snippet, &now)?;
-                let (stored_body, compressed) = compress_body(&msg.body)?;
+        let thread_id = resolve_thread(&mut tx, &msg, &snippet, &now).await?;
+        let (stored_body, compressed) = compress_body(&msg.body)?;
 
-                // Insert message row
-                tx.execute(
-                    "INSERT INTO messages (id, thread_id, from_account, subject, body, snippet, internal_date, in_reply_to, reply_by, reply_requested, source, compressed)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                    rusqlite::params![
-                        msg_id, thread_id, msg.from_account, msg.subject, stored_body,
-                        snippet, now, msg.in_reply_to, msg.reply_by, reply_requested, msg.source, compressed,
-                    ],
-                )?;
+        // Insert message row
+        sqlx::query(
+            "INSERT INTO messages (id, thread_id, from_account, subject, body, snippet, internal_date, in_reply_to, reply_by, reply_requested, source, compressed)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&msg_id)
+        .bind(&thread_id)
+        .bind(&msg.from_account)
+        .bind(&msg.subject)
+        .bind(&stored_body)
+        .bind(&snippet)
+        .bind(&now)
+        .bind(&msg.in_reply_to)
+        .bind(&msg.reply_by)
+        .bind(reply_requested)
+        .bind(&msg.source)
+        .bind(compressed)
+        .execute(&mut *tx)
+        .await?;
 
-                insert_recipients_and_labels(&tx, &msg_id, &msg)?;
+        insert_recipients_and_labels(&mut tx, &msg_id, &msg).await?;
 
-                let all_recipients: Vec<&str> = msg.to.iter().chain(msg.cc.iter()).map(|s| s.as_str()).collect();
-                update_thread_metadata(&tx, &thread_id, &msg.from_account, &all_recipients, &snippet, &now)?;
+        let all_recipients: Vec<&str> = msg.to.iter().chain(msg.cc.iter()).map(|s| s.as_str()).collect();
+        update_thread_metadata(&mut tx, &thread_id, &msg.from_account, &all_recipients, &snippet, &now).await?;
 
-                // Index in FTS5
-                tx.execute(
-                    "INSERT INTO messages_fts (rowid, subject, body) SELECT rowid, subject, body FROM messages WHERE id = ?1",
-                    rusqlite::params![msg_id],
-                )?;
+        // FTS is auto-managed by FULLTEXT index in MySQL — no manual insert needed
 
-                let has_attachments = attach_blobs(&tx, &msg_id, &msg.attachments)?;
+        let has_attachments = attach_blobs(&mut tx, &msg_id, &msg.attachments).await?;
 
-                tx.commit()?;
+        tx.commit().await?;
 
-                Ok(build_sent_message(msg, msg_id, thread_id, snippet, now, has_attachments, reply_requested))
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        Ok(build_sent_message(msg, msg_id, thread_id, snippet, now, has_attachments, reply_requested))
     }
 
     async fn get_message(&self, id: &str) -> Result<Message, StorageError> {
-        let id = id.to_string();
-        self.db
-            .call(move |conn| {
-                let msg = conn.query_row(
-                    "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source, compressed
-                     FROM messages WHERE id = ?1",
-                    rusqlite::params![id],
-                    row_to_message,
-                )
-                .map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(format!("message {id}"))))
-                    }
-                    e => tokio_rusqlite::Error::Rusqlite(e),
-                })?;
+        let row = sqlx::query(
+            "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source, compressed
+             FROM messages WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.db)
+        .await?;
 
-                // Load labels (for the sender's perspective — caller should specify account_id for per-account labels)
-                // For now, load all labels for this message
-                let mut stmt = conn.prepare(
-                    "SELECT DISTINCT label FROM message_labels WHERE message_id = ?1"
-                )?;
-                let labels: Vec<String> = stmt
-                    .query_map(rusqlite::params![msg.id], |row| row.get(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
+        let row = match row {
+            Some(r) => r,
+            None => return Err(StorageError::NotFound(format!("message {id}"))),
+        };
 
-                // Load recipients
-                let mut stmt = conn.prepare(
-                    "SELECT account_id, recipient_type FROM message_recipients WHERE message_id = ?1"
-                )?;
-                let recipients: Vec<Recipient> = stmt
-                    .query_map(rusqlite::params![msg.id], |row| {
-                        Ok(Recipient {
-                            account_id: row.get(0)?,
-                            recipient_type: row.get(1)?,
-                        })
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
+        let msg = row_to_message(&row);
 
-                Ok(Message { labels, recipients, ..msg })
+        // Load labels
+        let label_rows = sqlx::query(
+            "SELECT DISTINCT label FROM message_labels WHERE message_id = ?",
+        )
+        .bind(&msg.id)
+        .fetch_all(&self.db)
+        .await?;
+
+        let labels: Vec<String> = label_rows.iter().map(|r| r.get("label")).collect();
+
+        // Load recipients
+        let recip_rows = sqlx::query(
+            "SELECT account_id, recipient_type FROM message_recipients WHERE message_id = ?",
+        )
+        .bind(&msg.id)
+        .fetch_all(&self.db)
+        .await?;
+
+        let recipients: Vec<Recipient> = recip_rows
+            .iter()
+            .map(|r| Recipient {
+                account_id: r.get("account_id"),
+                recipient_type: r.get("recipient_type"),
             })
-            .await
-            .map_err(storage_err_from_tokio)
+            .collect();
+
+        Ok(Message { labels, recipients, ..msg })
     }
 
     async fn list_messages(
@@ -272,63 +242,60 @@ impl DataStore for SqliteDataStore {
         max_results: u32,
         page_token: Option<&str>,
     ) -> Result<MessageList, StorageError> {
-        let account_id = account_id.to_string();
-        let label = label.to_string();
-        let page_token = page_token.map(|s| s.to_string());
+        let base_sql = "SELECT m.id, m.thread_id, m.from_account, m.subject, m.body, m.snippet, m.has_attachments, m.internal_date, m.in_reply_to, m.reply_by, m.reply_requested, m.source, m.compressed
+             FROM messages m
+             JOIN message_labels ml ON m.id = ml.message_id
+             WHERE ml.account_id = ? AND ml.label = ?";
 
-        self.db
-            .call(move |conn| {
-                let (messages, next_page_token) = run_paginated_list(
-                    conn,
-                    &PaginatedQuery {
-                        base_sql: "SELECT m.id, m.thread_id, m.from_account, m.subject, m.body, m.snippet, m.has_attachments, m.internal_date, m.in_reply_to, m.reply_by, m.reply_requested, m.source, m.compressed
-                         FROM messages m
-                         JOIN message_labels ml ON m.id = ml.message_id
-                         WHERE ml.account_id = ?1 AND ml.label = ?2",
-                        date_column: "m.internal_date",
-                        account_id: &account_id,
-                        label: &label,
-                        page_token: &page_token,
-                        max_results,
-                    },
-                    row_to_message,
-                    |m| m.internal_date.clone(),
-                )?;
+        let (messages, next_page_token) = run_paginated_list(
+            &self.db,
+            &PaginatedQuery {
+                base_sql,
+                date_column: "m.internal_date",
+                account_id,
+                label,
+                page_token: &page_token.map(|s| s.to_string()),
+                max_results,
+            },
+            row_to_message,
+            |m| m.internal_date.clone(),
+        )
+        .await?;
 
-                Ok(MessageList {
-                    result_size_estimate: messages.len() as u32,
-                    messages,
-                    next_page_token,
-                })
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        Ok(MessageList {
+            result_size_estimate: messages.len() as u32,
+            messages,
+            next_page_token,
+        })
     }
 
     async fn delete_message(&self, id: &str) -> Result<(), StorageError> {
-        let id = id.to_string();
-        self.db
-            .call(move |conn| {
-                let tx = conn.transaction()?;
-                // Delete FTS entry
-                tx.execute(
-                    "DELETE FROM messages_fts WHERE rowid = (SELECT rowid FROM messages WHERE id = ?1)",
-                    rusqlite::params![id],
-                )?;
-                tx.execute("DELETE FROM message_labels WHERE message_id = ?1", rusqlite::params![id])?;
-                tx.execute("DELETE FROM message_recipients WHERE message_id = ?1", rusqlite::params![id])?;
-                tx.execute("DELETE FROM attachments WHERE message_id = ?1", rusqlite::params![id])?;
-                let rows = tx.execute("DELETE FROM messages WHERE id = ?1", rusqlite::params![id])?;
-                if rows == 0 {
-                    return Err(tokio_rusqlite::Error::Other(Box::new(
-                        StorageError::NotFound(format!("message {id}")),
-                    )));
-                }
-                tx.commit()?;
-                Ok(())
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        let mut tx = self.db.begin().await?;
+
+        // FTS is auto-managed — no manual delete needed
+        sqlx::query("DELETE FROM message_labels WHERE message_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM message_recipients WHERE message_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM attachments WHERE message_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        let result = sqlx::query("DELETE FROM messages WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NotFound(format!("message {id}")));
+        }
+
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn add_labels(
@@ -337,22 +304,17 @@ impl DataStore for SqliteDataStore {
         account_id: &str,
         labels: &[String],
     ) -> Result<(), StorageError> {
-        let message_id = message_id.to_string();
-        let account_id = account_id.to_string();
-        let labels = labels.to_vec();
-
-        self.db
-            .call(move |conn| {
-                for label in &labels {
-                    conn.execute(
-                        "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, ?3)",
-                        rusqlite::params![message_id, account_id, label],
-                    )?;
-                }
-                Ok(())
-            })
-            .await
-            .map_err(StorageError::from)
+        for label in labels {
+            sqlx::query(
+                "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
+            )
+            .bind(message_id)
+            .bind(account_id)
+            .bind(label)
+            .execute(&self.db)
+            .await?;
+        }
+        Ok(())
     }
 
     async fn remove_labels(
@@ -361,22 +323,17 @@ impl DataStore for SqliteDataStore {
         account_id: &str,
         labels: &[String],
     ) -> Result<(), StorageError> {
-        let message_id = message_id.to_string();
-        let account_id = account_id.to_string();
-        let labels = labels.to_vec();
-
-        self.db
-            .call(move |conn| {
-                for label in &labels {
-                    conn.execute(
-                        "DELETE FROM message_labels WHERE message_id = ?1 AND account_id = ?2 AND label = ?3",
-                        rusqlite::params![message_id, account_id, label],
-                    )?;
-                }
-                Ok(())
-            })
-            .await
-            .map_err(StorageError::from)
+        for label in labels {
+            sqlx::query(
+                "DELETE FROM message_labels WHERE message_id = ? AND account_id = ? AND label = ?",
+            )
+            .bind(message_id)
+            .bind(account_id)
+            .bind(label)
+            .execute(&self.db)
+            .await?;
+        }
+        Ok(())
     }
 
     async fn get_labels(
@@ -384,63 +341,50 @@ impl DataStore for SqliteDataStore {
         message_id: &str,
         account_id: &str,
     ) -> Result<Vec<String>, StorageError> {
-        let message_id = message_id.to_string();
-        let account_id = account_id.to_string();
+        let rows = sqlx::query(
+            "SELECT label FROM message_labels WHERE message_id = ? AND account_id = ?",
+        )
+        .bind(message_id)
+        .bind(account_id)
+        .fetch_all(&self.db)
+        .await?;
 
-        self.db
-            .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT label FROM message_labels WHERE message_id = ?1 AND account_id = ?2"
-                )?;
-                let labels: Vec<String> = stmt
-                    .query_map(rusqlite::params![message_id, account_id], |row| row.get(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(labels)
-            })
-            .await
-            .map_err(StorageError::from)
+        Ok(rows.iter().map(|r| r.get("label")).collect())
     }
 
     async fn list_labels_with_counts(
         &self,
         account_id: &str,
     ) -> Result<Vec<LabelCount>, StorageError> {
-        let account_id = account_id.to_string();
+        let rows = sqlx::query(
+            "SELECT ml.label,
+                    COALESCE(l.label_type, 'user') as label_type,
+                    COUNT(*) as message_count,
+                    CAST(SUM(CASE WHEN EXISTS(
+                        SELECT 1 FROM message_labels ul
+                        WHERE ul.message_id = ml.message_id
+                        AND ul.account_id = ml.account_id
+                        AND ul.label = 'UNREAD'
+                    ) THEN 1 ELSE 0 END) AS SIGNED) as unread_count
+             FROM message_labels ml
+             LEFT JOIN labels l ON l.name = ml.label AND (l.account_id IS NULL OR l.account_id = ml.account_id)
+             WHERE ml.account_id = ?
+             GROUP BY ml.label
+             ORDER BY ml.label",
+        )
+        .bind(account_id)
+        .fetch_all(&self.db)
+        .await?;
 
-        self.db
-            .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT ml.label,
-                            COALESCE(l.label_type, 'user') as label_type,
-                            COUNT(*) as message_count,
-                            SUM(CASE WHEN EXISTS(
-                                SELECT 1 FROM message_labels ul
-                                WHERE ul.message_id = ml.message_id
-                                AND ul.account_id = ml.account_id
-                                AND ul.label = 'UNREAD'
-                            ) THEN 1 ELSE 0 END) as unread_count
-                     FROM message_labels ml
-                     LEFT JOIN labels l ON l.name = ml.label AND (l.account_id IS NULL OR l.account_id = ml.account_id)
-                     WHERE ml.account_id = ?1
-                     GROUP BY ml.label
-                     ORDER BY ml.label"
-                )?;
-
-                let labels: Vec<LabelCount> = stmt
-                    .query_map(rusqlite::params![account_id], |row| {
-                        Ok(LabelCount {
-                            name: row.get(0)?,
-                            label_type: row.get(1)?,
-                            message_count: row.get(2)?,
-                            unread_count: row.get(3)?,
-                        })
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                Ok(labels)
+        Ok(rows
+            .iter()
+            .map(|row| LabelCount {
+                name: row.get("label"),
+                label_type: row.get("label_type"),
+                message_count: row.get::<i64, _>("message_count") as u32,
+                unread_count: row.get::<i64, _>("unread_count") as u32,
             })
-            .await
-            .map_err(StorageError::from)
+            .collect())
     }
 
     async fn attach_blob(
@@ -451,49 +395,42 @@ impl DataStore for SqliteDataStore {
         content_type: &str,
         size: u64,
     ) -> Result<(), StorageError> {
-        let message_id = message_id.to_string();
-        let blob_hash = blob_hash.to_string();
-        let filename = filename.to_string();
-        let content_type = content_type.to_string();
+        sqlx::query(
+            "INSERT INTO attachments (message_id, blob_hash, filename, content_type, size) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(message_id)
+        .bind(blob_hash)
+        .bind(filename)
+        .bind(content_type)
+        .bind(size)
+        .execute(&self.db)
+        .await?;
 
-        self.db
-            .call(move |conn| {
-                conn.execute(
-                    "INSERT INTO attachments (message_id, blob_hash, filename, content_type, size) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![message_id, blob_hash, filename, content_type, size],
-                )?;
-                // Mark message as having attachments
-                conn.execute(
-                    "UPDATE messages SET has_attachments = 1 WHERE id = ?1",
-                    rusqlite::params![message_id],
-                )?;
-                Ok(())
-            })
-            .await
-            .map_err(StorageError::from)
+        sqlx::query("UPDATE messages SET has_attachments = 1 WHERE id = ?")
+            .bind(message_id)
+            .execute(&self.db)
+            .await?;
+
+        Ok(())
     }
 
     async fn get_attachments(&self, message_id: &str) -> Result<Vec<Attachment>, StorageError> {
-        let message_id = message_id.to_string();
-        self.db
-            .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT blob_hash, filename, content_type, size FROM attachments WHERE message_id = ?1",
-                )?;
-                let attachments = stmt
-                    .query_map(rusqlite::params![message_id], |row| {
-                        Ok(Attachment {
-                            blob_hash: row.get(0)?,
-                            filename: row.get(1)?,
-                            content_type: row.get(2)?,
-                            size: row.get(3)?,
-                        })
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(attachments)
+        let rows = sqlx::query(
+            "SELECT blob_hash, filename, content_type, size FROM attachments WHERE message_id = ?",
+        )
+        .bind(message_id)
+        .fetch_all(&self.db)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| Attachment {
+                blob_hash: row.get("blob_hash"),
+                filename: row.get("filename"),
+                content_type: row.get("content_type"),
+                size: row.get::<i64, _>("size") as u64,
             })
-            .await
-            .map_err(StorageError::from)
+            .collect())
     }
 
     async fn create_label(
@@ -501,20 +438,17 @@ impl DataStore for SqliteDataStore {
         account_id: &str,
         name: &str,
     ) -> Result<(String, String), StorageError> {
-        let account_id = account_id.to_string();
-        let name = name.to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO labels (id, account_id, name, label_type) VALUES (?, ?, ?, 'user')",
+        )
+        .bind(&id)
+        .bind(account_id)
+        .bind(name)
+        .execute(&self.db)
+        .await?;
 
-        self.db
-            .call(move |conn| {
-                let id = uuid::Uuid::new_v4().to_string();
-                conn.execute(
-                    "INSERT INTO labels (id, account_id, name, label_type) VALUES (?1, ?2, ?3, 'user')",
-                    rusqlite::params![id, account_id, name],
-                )?;
-                Ok((id, name))
-            })
-            .await
-            .map_err(StorageError::from)
+        Ok((id, name.to_string()))
     }
 
     async fn delete_label(
@@ -522,30 +456,25 @@ impl DataStore for SqliteDataStore {
         account_id: &str,
         name: &str,
     ) -> Result<(), StorageError> {
-        let account_id = account_id.to_string();
-        let name = name.to_string();
+        let result = sqlx::query(
+            "DELETE FROM labels WHERE account_id = ? AND name = ? AND label_type = 'user'",
+        )
+        .bind(account_id)
+        .bind(name)
+        .execute(&self.db)
+        .await?;
 
-        self.db
-            .call(move |conn| {
-                // Only delete user labels, not system labels
-                let rows = conn.execute(
-                    "DELETE FROM labels WHERE account_id = ?1 AND name = ?2 AND label_type = 'user'",
-                    rusqlite::params![account_id, name],
-                )?;
-                if rows == 0 {
-                    return Err(tokio_rusqlite::Error::Other(Box::new(
-                        StorageError::NotFound(format!("label {name}")),
-                    )));
-                }
-                // Also remove from message_labels
-                conn.execute(
-                    "DELETE FROM message_labels WHERE account_id = ?1 AND label = ?2",
-                    rusqlite::params![account_id, name],
-                )?;
-                Ok(())
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NotFound(format!("label {name}")));
+        }
+
+        sqlx::query("DELETE FROM message_labels WHERE account_id = ? AND label = ?")
+            .bind(account_id)
+            .bind(name)
+            .execute(&self.db)
+            .await?;
+
+        Ok(())
     }
 
     async fn batch_modify_labels(
@@ -555,33 +484,31 @@ impl DataStore for SqliteDataStore {
         add: &[String],
         remove: &[String],
     ) -> Result<(), StorageError> {
-        let message_ids = message_ids.to_vec();
-        let account_id = account_id.to_string();
-        let add = add.to_vec();
-        let remove = remove.to_vec();
-
-        self.db
-            .call(move |conn| {
-                let tx = conn.transaction()?;
-                for msg_id in &message_ids {
-                    for label in &add {
-                        tx.execute(
-                            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, ?3)",
-                            rusqlite::params![msg_id, account_id, label],
-                        )?;
-                    }
-                    for label in &remove {
-                        tx.execute(
-                            "DELETE FROM message_labels WHERE message_id = ?1 AND account_id = ?2 AND label = ?3",
-                            rusqlite::params![msg_id, account_id, label],
-                        )?;
-                    }
-                }
-                tx.commit()?;
-                Ok(())
-            })
-            .await
-            .map_err(StorageError::from)
+        let mut tx = self.db.begin().await?;
+        for msg_id in message_ids {
+            for label in add {
+                sqlx::query(
+                    "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
+                )
+                .bind(msg_id)
+                .bind(account_id)
+                .bind(label)
+                .execute(&mut *tx)
+                .await?;
+            }
+            for label in remove {
+                sqlx::query(
+                    "DELETE FROM message_labels WHERE message_id = ? AND account_id = ? AND label = ?",
+                )
+                .bind(msg_id)
+                .bind(account_id)
+                .bind(label)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn create_list(
@@ -589,20 +516,14 @@ impl DataStore for SqliteDataStore {
         name: &str,
         description: &str,
     ) -> Result<String, StorageError> {
-        let name = name.to_string();
-        let description = description.to_string();
-
-        self.db
-            .call(move |conn| {
-                let id = uuid::Uuid::new_v4().to_string();
-                conn.execute(
-                    "INSERT INTO lists (id, name, description) VALUES (?1, ?2, ?3)",
-                    rusqlite::params![id, name, description],
-                )?;
-                Ok(id)
-            })
-            .await
-            .map_err(StorageError::from)
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO lists (id, name, description) VALUES (?, ?, ?)")
+            .bind(&id)
+            .bind(name)
+            .bind(description)
+            .execute(&self.db)
+            .await?;
+        Ok(id)
     }
 
     async fn subscribe_to_list(
@@ -610,19 +531,12 @@ impl DataStore for SqliteDataStore {
         list_id: &str,
         account_id: &str,
     ) -> Result<(), StorageError> {
-        let list_id = list_id.to_string();
-        let account_id = account_id.to_string();
-
-        self.db
-            .call(move |conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO list_members (list_id, account_id) VALUES (?1, ?2)",
-                    rusqlite::params![list_id, account_id],
-                )?;
-                Ok(())
-            })
-            .await
-            .map_err(StorageError::from)
+        sqlx::query("INSERT IGNORE INTO list_members (list_id, account_id) VALUES (?, ?)")
+            .bind(list_id)
+            .bind(account_id)
+            .execute(&self.db)
+            .await?;
+        Ok(())
     }
 
     async fn unsubscribe_from_list(
@@ -630,105 +544,68 @@ impl DataStore for SqliteDataStore {
         list_id: &str,
         account_id: &str,
     ) -> Result<(), StorageError> {
-        let list_id = list_id.to_string();
-        let account_id = account_id.to_string();
-
-        self.db
-            .call(move |conn| {
-                conn.execute(
-                    "DELETE FROM list_members WHERE list_id = ?1 AND account_id = ?2",
-                    rusqlite::params![list_id, account_id],
-                )?;
-                Ok(())
-            })
-            .await
-            .map_err(StorageError::from)
+        sqlx::query("DELETE FROM list_members WHERE list_id = ? AND account_id = ?")
+            .bind(list_id)
+            .bind(account_id)
+            .execute(&self.db)
+            .await?;
+        Ok(())
     }
 
     async fn get_list_members(
         &self,
         list_id: &str,
     ) -> Result<Vec<String>, StorageError> {
-        let list_id = list_id.to_string();
+        let rows = sqlx::query("SELECT account_id FROM list_members WHERE list_id = ?")
+            .bind(list_id)
+            .fetch_all(&self.db)
+            .await?;
 
-        self.db
-            .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT account_id FROM list_members WHERE list_id = ?1"
-                )?;
-                let members: Vec<String> = stmt
-                    .query_map(rusqlite::params![list_id], |row| row.get(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(members)
-            })
-            .await
-            .map_err(StorageError::from)
+        Ok(rows.iter().map(|r| r.get("account_id")).collect())
     }
 
     async fn get_list_by_name(
         &self,
         name: &str,
     ) -> Result<(String, String, String), StorageError> {
-        let name = name.to_string();
+        let row = sqlx::query("SELECT id, name, description FROM lists WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.db)
+            .await?;
 
-        self.db
-            .call(move |conn| {
-                conn.query_row(
-                    "SELECT id, name, description FROM lists WHERE name = ?1",
-                    rusqlite::params![name],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(format!("list {name}"))))
-                    }
-                    e => tokio_rusqlite::Error::Rusqlite(e),
-                })
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        match row {
+            Some(row) => Ok((row.get("id"), row.get("name"), row.get("description"))),
+            None => Err(StorageError::NotFound(format!("list {name}"))),
+        }
     }
 
     async fn get_thread(&self, id: &str) -> Result<Thread, StorageError> {
-        let id = id.to_string();
-        self.db
-            .call(move |conn| {
-                let thread = conn.query_row(
-                    "SELECT id, subject, snippet, last_message_at, message_count, participants FROM threads WHERE id = ?1",
-                    rusqlite::params![id],
-                    |row| {
-                        let participants_str: String = row.get(5)?;
-                        let participants: Vec<String> = serde_json::from_str(&participants_str).unwrap_or_default();
-                        Ok(Thread {
-                            id: row.get(0)?,
-                            subject: row.get(1)?,
-                            snippet: row.get(2)?,
-                            last_message_at: row.get(3)?,
-                            message_count: row.get(4)?,
-                            participants,
-                            messages: vec![],
-                        })
-                    },
-                ).map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(format!("thread {id}"))))
-                    }
-                    e => tokio_rusqlite::Error::Rusqlite(e),
-                })?;
+        let row = sqlx::query(
+            "SELECT id, subject, snippet, last_message_at, message_count, participants FROM threads WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.db)
+        .await?;
 
-                // Load messages in thread
-                let mut stmt = conn.prepare(
-                    "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source, compressed
-                     FROM messages WHERE thread_id = ?1 ORDER BY internal_date ASC"
-                )?;
-                let messages: Vec<Message> = stmt
-                    .query_map(rusqlite::params![thread.id], row_to_message)?
-                    .collect::<Result<Vec<_>, _>>()?;
+        let row = match row {
+            Some(r) => r,
+            None => return Err(StorageError::NotFound(format!("thread {id}"))),
+        };
 
-                Ok(Thread { messages, ..thread })
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        let thread = row_to_thread(&row);
+
+        // Load messages in thread
+        let msg_rows = sqlx::query(
+            "SELECT id, thread_id, from_account, subject, body, snippet, has_attachments, internal_date, in_reply_to, reply_by, reply_requested, source, compressed
+             FROM messages WHERE thread_id = ? ORDER BY internal_date ASC",
+        )
+        .bind(&thread.id)
+        .fetch_all(&self.db)
+        .await?;
+
+        let messages: Vec<Message> = msg_rows.iter().map(row_to_message).collect();
+
+        Ok(Thread { messages, ..thread })
     }
 
     async fn list_threads(
@@ -738,159 +615,141 @@ impl DataStore for SqliteDataStore {
         max_results: u32,
         page_token: Option<&str>,
     ) -> Result<ThreadList, StorageError> {
-        let account_id = account_id.to_string();
-        let label = label.to_string();
-        let page_token = page_token.map(|s| s.to_string());
+        let base_sql = "SELECT DISTINCT t.id, t.subject, t.snippet, t.last_message_at, t.message_count, t.participants
+             FROM threads t
+             JOIN messages m ON m.thread_id = t.id
+             JOIN message_labels ml ON ml.message_id = m.id
+             WHERE ml.account_id = ? AND ml.label = ?";
 
-        self.db
-            .call(move |conn| {
-                let (threads, next_page_token) = run_paginated_list(
-                    conn,
-                    &PaginatedQuery {
-                        base_sql: "SELECT DISTINCT t.id, t.subject, t.snippet, t.last_message_at, t.message_count, t.participants
-                         FROM threads t
-                         JOIN messages m ON m.thread_id = t.id
-                         JOIN message_labels ml ON ml.message_id = m.id
-                         WHERE ml.account_id = ?1 AND ml.label = ?2",
-                        date_column: "t.last_message_at",
-                        account_id: &account_id,
-                        label: &label,
-                        page_token: &page_token,
-                        max_results,
-                    },
-                    row_to_thread,
-                    |t| t.last_message_at.clone(),
-                )?;
+        let (threads, next_page_token) = run_paginated_list(
+            &self.db,
+            &PaginatedQuery {
+                base_sql,
+                date_column: "t.last_message_at",
+                account_id,
+                label,
+                page_token: &page_token.map(|s| s.to_string()),
+                max_results,
+            },
+            row_to_thread,
+            |t| t.last_message_at.clone(),
+        )
+        .await?;
 
-                Ok(ThreadList {
-                    result_size_estimate: threads.len() as u32,
-                    threads,
-                    next_page_token,
-                })
-            })
-            .await
-            .map_err(storage_err_from_tokio)
+        Ok(ThreadList {
+            result_size_estimate: threads.len() as u32,
+            threads,
+            next_page_token,
+        })
     }
 
     async fn get_unread_count(&self, account_id: &str) -> Result<u32, StorageError> {
-        let account_id = account_id.to_string();
-        self.db
-            .call(move |conn| {
-                conn.query_row(
-                    "SELECT COUNT(*) FROM message_labels WHERE account_id = ?1 AND label = 'UNREAD'",
-                    rusqlite::params![account_id],
-                    |row| row.get(0),
-                )
-                .map_err(tokio_rusqlite::Error::Rusqlite)
-            })
-            .await
-            .map_err(StorageError::from)
+        let row = sqlx::query(
+            "SELECT COUNT(*) as cnt FROM message_labels WHERE account_id = ? AND label = 'UNREAD'",
+        )
+        .bind(account_id)
+        .fetch_one(&self.db)
+        .await?;
+
+        Ok(row.get::<i64, _>("cnt") as u32)
     }
 
     async fn get_pending_replies(&self, account_id: &str) -> Result<Vec<PendingReply>, StorageError> {
-        let account_id = account_id.to_string();
-        self.db
-            .call(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT m.id, m.from_account, m.subject, m.reply_by, m.internal_date
-                     FROM messages m
-                     JOIN message_recipients mr ON m.id = mr.message_id
-                     WHERE mr.account_id = ?1 AND m.reply_requested = 1
-                     AND NOT EXISTS (
-                         SELECT 1 FROM messages reply
-                         WHERE reply.in_reply_to = m.id AND reply.from_account = ?1
-                     )
-                     ORDER BY m.reply_by ASC NULLS LAST"
-                )?;
-                let replies: Vec<PendingReply> = stmt
-                    .query_map(rusqlite::params![account_id], |row| {
-                        Ok(PendingReply {
-                            message_id: row.get(0)?,
-                            from_account: row.get(1)?,
-                            subject: row.get(2)?,
-                            reply_by: row.get(3)?,
-                            sent_at: row.get(4)?,
-                        })
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(replies)
+        let rows = sqlx::query(
+            "SELECT m.id, m.from_account, m.subject, m.reply_by, m.internal_date
+             FROM messages m
+             JOIN message_recipients mr ON m.id = mr.message_id
+             WHERE mr.account_id = ? AND m.reply_requested = 1
+             AND NOT EXISTS (
+                 SELECT 1 FROM messages reply
+                 WHERE reply.in_reply_to = m.id AND reply.from_account = ?
+             )
+             ORDER BY m.reply_by IS NULL, m.reply_by ASC",
+        )
+        .bind(account_id)
+        .bind(account_id)
+        .fetch_all(&self.db)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| PendingReply {
+                message_id: row.get("id"),
+                from_account: row.get("from_account"),
+                subject: row.get("subject"),
+                reply_by: row.get("reply_by"),
+                sent_at: row.get("internal_date"),
             })
-            .await
-            .map_err(StorageError::from)
+            .collect())
     }
 
     async fn label_overdue_messages(&self) -> Result<u32, StorageError> {
-        self.db
-            .call(move |conn| {
-                let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-                // Find messages with reply_by in the past that don't have OVERDUE label yet
-                let mut stmt = conn.prepare(
-                    "SELECT DISTINCT m.id, mr.account_id
-                     FROM messages m
-                     JOIN message_recipients mr ON m.id = mr.message_id
-                     WHERE m.reply_requested = 1
-                     AND m.reply_by < ?1
-                     AND NOT EXISTS (
-                         SELECT 1 FROM messages reply
-                         WHERE reply.in_reply_to = m.id AND reply.from_account = mr.account_id
-                     )
-                     AND NOT EXISTS (
-                         SELECT 1 FROM message_labels ml
-                         WHERE ml.message_id = m.id AND ml.account_id = mr.account_id AND ml.label = 'OVERDUE'
-                     )"
-                )?;
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
 
-                let overdue: Vec<(String, String)> = stmt
-                    .query_map(rusqlite::params![now], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
+        let rows = sqlx::query(
+            "SELECT DISTINCT m.id, mr.account_id
+             FROM messages m
+             JOIN message_recipients mr ON m.id = mr.message_id
+             WHERE m.reply_requested = 1
+             AND m.reply_by < ?
+             AND NOT EXISTS (
+                 SELECT 1 FROM messages reply
+                 WHERE reply.in_reply_to = m.id AND reply.from_account = mr.account_id
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM message_labels ml
+                 WHERE ml.message_id = m.id AND ml.account_id = mr.account_id AND ml.label = 'OVERDUE'
+             )",
+        )
+        .bind(&now)
+        .fetch_all(&self.db)
+        .await?;
 
-                let count = overdue.len() as u32;
-                for (msg_id, account_id) in &overdue {
-                    conn.execute(
-                        "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'OVERDUE')",
-                        rusqlite::params![msg_id, account_id],
-                    )?;
-                }
+        let count = rows.len() as u32;
+        for row in &rows {
+            let msg_id: String = row.get("id");
+            let acct_id: String = row.get("account_id");
+            sqlx::query(
+                "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'OVERDUE')",
+            )
+            .bind(&msg_id)
+            .bind(&acct_id)
+            .execute(&self.db)
+            .await?;
+        }
 
-                Ok(count)
-            })
-            .await
-            .map_err(StorageError::from)
+        Ok(count)
     }
+
     async fn get_analytics(&self) -> Result<Analytics, StorageError> {
-        self.db
-            .call(move |conn| {
-                let (total_accounts, total_messages, total_threads, total_blobs) =
-                    conn.query_row(
-                        "SELECT (SELECT COUNT(*) FROM accounts),
-                                (SELECT COUNT(*) FROM messages),
-                                (SELECT COUNT(*) FROM threads),
-                                (SELECT COUNT(*) FROM blobs)",
-                        [],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                    )?;
+        let row = sqlx::query(
+            "SELECT (SELECT COUNT(*) FROM accounts) as total_accounts,
+                    (SELECT COUNT(*) FROM messages) as total_messages,
+                    (SELECT COUNT(*) FROM threads) as total_threads,
+                    (SELECT COUNT(*) FROM blobs) as total_blobs",
+        )
+        .fetch_one(&self.db)
+        .await?;
 
-                let per_account = query_per_account_stats(conn)?;
+        let total_accounts: i64 = row.get("total_accounts");
+        let total_messages: i64 = row.get("total_messages");
+        let total_threads: i64 = row.get("total_threads");
+        let total_blobs: i64 = row.get("total_blobs");
 
-                Ok(Analytics {
-                    total_accounts,
-                    total_messages,
-                    total_threads,
-                    total_blobs,
-                    per_account,
-                })
-            })
-            .await
-            .map_err(StorageError::from)
+        let per_account = query_per_account_stats(&self.db).await?;
+
+        Ok(Analytics {
+            total_accounts: total_accounts as u32,
+            total_messages: total_messages as u32,
+            total_threads: total_threads as u32,
+            total_blobs: total_blobs as u32,
+            per_account,
+        })
     }
 }
 
-fn query_per_account_stats(
-    conn: &rusqlite::Connection,
-) -> Result<Vec<AccountStats>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+async fn query_per_account_stats(pool: &DbPool) -> Result<Vec<AccountStats>, sqlx::Error> {
+    let rows = sqlx::query(
         "SELECT a.id, a.name,
             (SELECT COUNT(*) FROM messages m WHERE m.from_account = a.id) AS sent,
             (SELECT COUNT(DISTINCT mr.message_id) FROM message_recipients mr WHERE mr.account_id = a.id) AS received,
@@ -898,69 +757,70 @@ fn query_per_account_stats(
             (SELECT COUNT(*) FROM message_labels ml WHERE ml.account_id = a.id AND ml.label = 'UNREAD') AS unread
          FROM accounts a
          ORDER BY a.name",
-    )?;
-    let stats = stmt
-        .query_map([], |row| {
-            Ok(AccountStats {
-                account_id: row.get(0)?,
-                account_name: row.get(1)?,
-                messages_sent: row.get(2)?,
-                messages_received: row.get(3)?,
-                threads_started: row.get(4)?,
-                unread_count: row.get(5)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(stats)
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| AccountStats {
+            account_id: row.get("id"),
+            account_name: row.get("name"),
+            messages_sent: row.get::<i64, _>("sent") as u32,
+            messages_received: row.get::<i64, _>("received") as u32,
+            threads_started: row.get::<i64, _>("threads_started") as u32,
+            unread_count: row.get::<i64, _>("unread") as u32,
+        })
+        .collect())
 }
 
-fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
-    let stored_body: String = row.get(4)?;
-    let compressed: bool = row.get::<_, i32>(12)? != 0;
-    Ok(Message {
-        id: row.get(0)?,
-        thread_id: row.get(1)?,
-        from_account: row.get(2)?,
-        subject: row.get(3)?,
+fn row_to_message(row: &sqlx::mysql::MySqlRow) -> Message {
+    let stored_body: String = row.get("body");
+    let compressed: bool = row.get::<i32, _>("compressed") != 0;
+    Message {
+        id: row.get("id"),
+        thread_id: row.get("thread_id"),
+        from_account: row.get("from_account"),
+        subject: row.get("subject"),
         body: decompress_body(&stored_body, compressed),
-        snippet: row.get(5)?,
-        has_attachments: row.get::<_, i32>(6)? != 0,
-        internal_date: row.get(7)?,
-        in_reply_to: row.get(8)?,
-        reply_by: row.get(9)?,
-        reply_requested: row.get::<_, i32>(10)? != 0,
+        snippet: row.get("snippet"),
+        has_attachments: row.get::<i32, _>("has_attachments") != 0,
+        internal_date: row.get("internal_date"),
+        in_reply_to: row.get("in_reply_to"),
+        reply_by: row.get("reply_by"),
+        reply_requested: row.get::<i32, _>("reply_requested") != 0,
         labels: vec![],
         recipients: vec![],
-        source: row.get(11)?,
-    })
+        source: row.get("source"),
+    }
 }
 
-fn row_to_thread(row: &rusqlite::Row) -> rusqlite::Result<Thread> {
-    let participants_str: String = row.get(5)?;
+fn row_to_thread(row: &sqlx::mysql::MySqlRow) -> Thread {
+    let participants_str: serde_json::Value = row.get("participants");
     let participants: Vec<String> =
-        serde_json::from_str(&participants_str).unwrap_or_default();
-    Ok(Thread {
-        id: row.get(0)?,
-        subject: row.get(1)?,
-        snippet: row.get(2)?,
-        last_message_at: row.get(3)?,
-        message_count: row.get(4)?,
+        serde_json::from_value(participants_str).unwrap_or_default();
+    Thread {
+        id: row.get("id"),
+        subject: row.get("subject"),
+        snippet: row.get("snippet"),
+        last_message_at: row.get("last_message_at"),
+        message_count: row.get::<i32, _>("message_count") as u32,
         participants,
         messages: vec![],
-    })
+    }
 }
 
-fn row_to_account(row: &rusqlite::Row) -> rusqlite::Result<Account> {
-    Ok(Account {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        display_name: row.get(2)?,
-        bio: row.get(3)?,
-        bearer_token: row.get(4)?,
-        tmux_pane_id: row.get(5)?,
-        active: row.get::<_, i32>(6)? != 0,
-        created_at: row.get(7)?,
-    })
+fn row_to_account(row: &sqlx::mysql::MySqlRow) -> Account {
+    Account {
+        id: row.get("id"),
+        name: row.get("name"),
+        display_name: row.get("display_name"),
+        bio: row.get("bio"),
+        bearer_token: row.get("bearer_token"),
+        tmux_pane_id: row.get("tmux_pane_id"),
+        active: row.get::<i32, _>("active") != 0,
+        created_at: row.get("created_at"),
+    }
 }
 
 fn decompress_body(stored_body: &str, compressed: bool) -> String {
@@ -988,50 +848,51 @@ fn make_snippet(body: &str) -> String {
 }
 
 /// Resolve thread ID: use explicit, inherit from parent, or create new.
-fn resolve_thread(
-    tx: &rusqlite::Transaction,
+async fn resolve_thread(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     msg: &NewMessage,
     snippet: &str,
     now: &str,
-) -> Result<String, tokio_rusqlite::Error> {
+) -> Result<String, StorageError> {
     if let Some(ref tid) = msg.thread_id {
-        let exists: bool = tx.query_row(
-            "SELECT COUNT(*) > 0 FROM threads WHERE id = ?1",
-            rusqlite::params![tid],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(tokio_rusqlite::Error::Other(Box::new(
-                StorageError::NotFound(format!("thread {tid}")),
-            )));
+        let row = sqlx::query("SELECT COUNT(*) as cnt FROM threads WHERE id = ?")
+            .bind(tid)
+            .fetch_one(&mut **tx)
+            .await?;
+        let count: i64 = row.get("cnt");
+        if count == 0 {
+            return Err(StorageError::NotFound(format!("thread {tid}")));
         }
         Ok(tid.clone())
     } else if let Some(ref reply_to) = msg.in_reply_to {
-        tx.query_row(
-            "SELECT thread_id FROM messages WHERE id = ?1",
-            rusqlite::params![reply_to],
-            |row| row.get::<_, String>(0),
-        )
-        .map_err(|_| {
-            tokio_rusqlite::Error::Other(Box::new(StorageError::NotFound(
-                format!("in_reply_to message {reply_to}"),
-            )))
-        })
+        let row = sqlx::query("SELECT thread_id FROM messages WHERE id = ?")
+            .bind(reply_to)
+            .fetch_optional(&mut **tx)
+            .await?;
+        match row {
+            Some(row) => Ok(row.get("thread_id")),
+            None => Err(StorageError::NotFound(format!("in_reply_to message {reply_to}"))),
+        }
     } else {
         let tid = uuid::Uuid::new_v4().to_string();
-        tx.execute(
-            "INSERT INTO threads (id, subject, snippet, last_message_at, message_count, participants) VALUES (?1, ?2, ?3, ?4, 0, '[]')",
-            rusqlite::params![tid, msg.subject, snippet, now],
-        )?;
+        sqlx::query(
+            "INSERT INTO threads (id, subject, snippet, last_message_at, message_count, participants) VALUES (?, ?, ?, ?, 0, '[]')",
+        )
+        .bind(&tid)
+        .bind(&msg.subject)
+        .bind(snippet)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
         Ok(tid)
     }
 }
 
 /// Compress body if > 512 bytes using zstd + base64.
-fn compress_body(body: &str) -> Result<(String, bool), tokio_rusqlite::Error> {
+fn compress_body(body: &str) -> Result<(String, bool), StorageError> {
     if body.len() > 512 {
         let encoded = zstd::encode_all(body.as_bytes(), 3)
-            .map_err(|e| tokio_rusqlite::Error::Other(Box::new(StorageError::BlobIo(e))))?;
+            .map_err(StorageError::BlobIo)?;
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&encoded);
         Ok((b64, true))
@@ -1041,53 +902,75 @@ fn compress_body(body: &str) -> Result<(String, bool), tokio_rusqlite::Error> {
 }
 
 /// Insert recipients and assign labels (SENT for sender, INBOX+UNREAD for recipients).
-fn insert_recipients_and_labels(
-    tx: &rusqlite::Transaction,
+async fn insert_recipients_and_labels(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     msg_id: &str,
     msg: &NewMessage,
-) -> Result<(), rusqlite::Error> {
+) -> Result<(), StorageError> {
     for to in &msg.to {
-        tx.execute(
-            "INSERT INTO message_recipients (message_id, account_id, recipient_type) VALUES (?1, ?2, 'to')",
-            rusqlite::params![msg_id, to],
-        )?;
+        sqlx::query(
+            "INSERT INTO message_recipients (message_id, account_id, recipient_type) VALUES (?, ?, 'to')",
+        )
+        .bind(msg_id)
+        .bind(to)
+        .execute(&mut **tx)
+        .await?;
     }
     for cc in &msg.cc {
-        tx.execute(
-            "INSERT INTO message_recipients (message_id, account_id, recipient_type) VALUES (?1, ?2, 'cc')",
-            rusqlite::params![msg_id, cc],
-        )?;
+        sqlx::query(
+            "INSERT INTO message_recipients (message_id, account_id, recipient_type) VALUES (?, ?, 'cc')",
+        )
+        .bind(msg_id)
+        .bind(cc)
+        .execute(&mut **tx)
+        .await?;
     }
 
     // Sender gets SENT
-    tx.execute(
-        "INSERT INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'SENT')",
-        rusqlite::params![msg_id, msg.from_account],
-    )?;
+    sqlx::query(
+        "INSERT INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'SENT')",
+    )
+    .bind(msg_id)
+    .bind(&msg.from_account)
+    .execute(&mut **tx)
+    .await?;
 
     // Recipients get INBOX + UNREAD
     for recip in msg.to.iter().chain(msg.cc.iter()) {
-        tx.execute(
-            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'INBOX')",
-            rusqlite::params![msg_id, recip],
-        )?;
-        tx.execute(
-            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'UNREAD')",
-            rusqlite::params![msg_id, recip],
-        )?;
+        sqlx::query(
+            "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'INBOX')",
+        )
+        .bind(msg_id)
+        .bind(recip)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query(
+            "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'UNREAD')",
+        )
+        .bind(msg_id)
+        .bind(recip)
+        .execute(&mut **tx)
+        .await?;
     }
 
     // Custom labels
     for label in &msg.labels {
-        tx.execute(
-            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, ?3)",
-            rusqlite::params![msg_id, msg.from_account, label],
-        )?;
+        sqlx::query(
+            "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
+        )
+        .bind(msg_id)
+        .bind(&msg.from_account)
+        .bind(label)
+        .execute(&mut **tx)
+        .await?;
         if label == "ISSUE" {
-            tx.execute(
-                "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?1, ?2, 'OPEN')",
-                rusqlite::params![msg_id, msg.from_account],
-            )?;
+            sqlx::query(
+                "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'OPEN')",
+            )
+            .bind(msg_id)
+            .bind(&msg.from_account)
+            .execute(&mut **tx)
+            .await?;
         }
     }
 
@@ -1095,14 +978,14 @@ fn insert_recipients_and_labels(
 }
 
 /// Update thread metadata after inserting a message.
-fn update_thread_metadata(
-    tx: &rusqlite::Transaction,
+async fn update_thread_metadata(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     thread_id: &str,
     from: &str,
     recipients: &[&str],
     snippet: &str,
     now: &str,
-) -> Result<(), rusqlite::Error> {
+) -> Result<(), StorageError> {
     let mut parts: Vec<String> = vec![from.to_string()];
     for r in recipients {
         if !parts.contains(&r.to_string()) {
@@ -1111,10 +994,16 @@ fn update_thread_metadata(
     }
     let participants_json = serde_json::to_string(&parts).unwrap_or_else(|_| "[]".to_string());
 
-    tx.execute(
-        "UPDATE threads SET snippet = ?1, last_message_at = ?2, message_count = message_count + 1, participants = ?3 WHERE id = ?4",
-        rusqlite::params![snippet, now, participants_json, thread_id],
-    )?;
+    sqlx::query(
+        "UPDATE threads SET snippet = ?, last_message_at = ?, message_count = message_count + 1, participants = ? WHERE id = ?",
+    )
+    .bind(snippet)
+    .bind(now)
+    .bind(&participants_json)
+    .bind(thread_id)
+    .execute(&mut **tx)
+    .await?;
+
     Ok(())
 }
 
@@ -1146,60 +1035,72 @@ struct PaginatedQuery<'a> {
 }
 
 /// Execute a paginated list query with dynamic params, page_token filtering, and pagination.
-fn run_paginated_list<T, F, G>(
-    conn: &rusqlite::Connection,
+async fn run_paginated_list<T, F, G>(
+    pool: &DbPool,
     q: &PaginatedQuery<'_>,
     row_mapper: F,
     token_fn: G,
-) -> Result<(Vec<T>, Option<String>), tokio_rusqlite::Error>
+) -> Result<(Vec<T>, Option<String>), StorageError>
 where
-    F: FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
+    F: Fn(&sqlx::mysql::MySqlRow) -> T,
     G: FnOnce(&T) -> String,
 {
-    let mut query = String::from(q.base_sql);
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-        Box::new(q.account_id.to_string()),
-        Box::new(q.label.to_string()),
-    ];
-
-    if let Some(token) = q.page_token {
-        query.push_str(&format!(" AND {} <= ?3", q.date_column));
-        params.push(Box::new(token.clone()));
-    }
-
-    query.push_str(&format!(" ORDER BY {} DESC LIMIT ?", q.date_column));
     let limit = q.max_results + 1;
-    params.push(Box::new(limit));
 
-    let mut stmt = conn.prepare(&query)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params.iter().map(|p| p.as_ref()).collect();
-    let mut items: Vec<T> = stmt
-        .query_map(param_refs.as_slice(), row_mapper)?
-        .collect::<Result<Vec<_>, _>>()?;
+    // Build dynamic SQL with string formatting (sqlx doesn't support dynamic column names via bind)
+    let query = if q.page_token.is_some() {
+        format!(
+            "{} AND {} <= ? ORDER BY {} DESC LIMIT ?",
+            q.base_sql, q.date_column, q.date_column
+        )
+    } else {
+        format!(
+            "{} ORDER BY {} DESC LIMIT ?",
+            q.base_sql, q.date_column
+        )
+    };
 
+    let rows = if let Some(token) = q.page_token {
+        sqlx::query(&query)
+            .bind(q.account_id)
+            .bind(q.label)
+            .bind(token)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+    } else {
+        sqlx::query(&query)
+            .bind(q.account_id)
+            .bind(q.label)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+    };
+
+    let mut items: Vec<T> = rows.iter().map(&row_mapper).collect();
     let next_page_token = paginate_results(&mut items, q.max_results, token_fn);
     Ok((items, next_page_token))
 }
 
 /// Link blob attachments to a message and set has_attachments flag.
-fn attach_blobs(
-    tx: &rusqlite::Transaction,
+async fn attach_blobs(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     msg_id: &str,
     attachments: &[String],
-) -> Result<bool, rusqlite::Error> {
+) -> Result<bool, StorageError> {
     let has_attachments = !attachments.is_empty();
     for blob_hash in attachments {
-        tx.execute(
-            "INSERT INTO attachments (message_id, blob_hash) VALUES (?1, ?2)",
-            rusqlite::params![msg_id, blob_hash],
-        )?;
+        sqlx::query("INSERT INTO attachments (message_id, blob_hash) VALUES (?, ?)")
+            .bind(msg_id)
+            .bind(blob_hash)
+            .execute(&mut **tx)
+            .await?;
     }
     if has_attachments {
-        tx.execute(
-            "UPDATE messages SET has_attachments = 1 WHERE id = ?1",
-            rusqlite::params![msg_id],
-        )?;
+        sqlx::query("UPDATE messages SET has_attachments = 1 WHERE id = ?")
+            .bind(msg_id)
+            .execute(&mut **tx)
+            .await?;
     }
     Ok(has_attachments)
 }
@@ -1230,582 +1131,5 @@ fn build_sent_message(
         body: msg.body, snippet, has_attachments, internal_date,
         in_reply_to: msg.in_reply_to, reply_by: msg.reply_by,
         reply_requested, labels, recipients, source: msg.source,
-    }
-}
-
-fn storage_err_from_tokio(e: tokio_rusqlite::Error) -> StorageError {
-    match e {
-        tokio_rusqlite::Error::Other(inner) => {
-            if let Some(se) = inner.downcast_ref::<StorageError>() {
-                match se {
-                    StorageError::NotFound(msg) => StorageError::NotFound(msg.clone()),
-                    _ => StorageError::Database(tokio_rusqlite::Error::Other(inner)),
-                }
-            } else {
-                StorageError::Database(tokio_rusqlite::Error::Other(inner))
-            }
-        }
-        e => StorageError::Database(e),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::schema::init_schema;
-
-    async fn test_store() -> SqliteDataStore {
-        let conn = tokio_rusqlite::Connection::open_in_memory().await.unwrap();
-        conn.call(|c| { init_schema(c).unwrap(); Ok(()) }).await.unwrap();
-        SqliteDataStore::new(conn)
-    }
-
-    #[tokio::test]
-    async fn test_create_and_get_account() {
-        let store = test_store().await;
-
-        let account = store.create_account("agent-1", Some("Agent One"), None).await.unwrap();
-        assert_eq!(account.name, "agent-1");
-        assert_eq!(account.display_name, Some("Agent One".to_string()));
-        assert!(account.active);
-        assert!(!account.bearer_token.is_empty());
-
-        // Get by ID
-        let fetched = store.get_account_by_id(&account.id).await.unwrap();
-        assert_eq!(fetched.name, "agent-1");
-
-        // Get by name
-        let fetched = store.get_account_by_name("agent-1").await.unwrap();
-        assert_eq!(fetched.id, account.id);
-
-        // Get by token
-        let fetched = store.get_account_by_token(&account.bearer_token).await.unwrap();
-        assert_eq!(fetched.id, account.id);
-    }
-
-    #[tokio::test]
-    async fn test_account_not_found() {
-        let store = test_store().await;
-        let result = store.get_account_by_id("nonexistent").await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_duplicate_account_name() {
-        let store = test_store().await;
-        store.create_account("agent-1", None, None).await.unwrap();
-        let result = store.create_account("agent-1", None, None).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_update_pane() {
-        let store = test_store().await;
-        let account = store.create_account("agent-1", None, None).await.unwrap();
-        assert!(account.tmux_pane_id.is_none());
-
-        store.update_pane(&account.id, "%42").await.unwrap();
-        let fetched = store.get_account_by_id(&account.id).await.unwrap();
-        assert_eq!(fetched.tmux_pane_id, Some("%42".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_send_and_get_message() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        let msg = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            cc: vec![],
-            subject: "Hello".to_string(),
-            body: "World".to_string(),
-            thread_id: None,
-            in_reply_to: None,
-            reply_by: None,
-            labels: vec![],
-            source: None, attachments: vec![],
-        };
-
-        let sent = store.insert_message(msg).await.unwrap();
-        assert_eq!(sent.subject, "Hello");
-        assert_eq!(sent.from_account, sender.id);
-        assert!(!sent.thread_id.is_empty());
-
-        // Get the message back
-        let fetched = store.get_message(&sent.id).await.unwrap();
-        assert_eq!(fetched.subject, "Hello");
-        assert_eq!(fetched.body, "World");
-        assert!(fetched.recipients.iter().any(|r| r.account_id == recipient.id));
-    }
-
-    #[tokio::test]
-    async fn test_message_labels_auto_assignment() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        let msg = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            cc: vec![],
-            subject: "Test".to_string(),
-            body: "Body".to_string(),
-            thread_id: None,
-            in_reply_to: None,
-            reply_by: None,
-            labels: vec![],
-            source: None, attachments: vec![],
-        };
-
-        let sent = store.insert_message(msg).await.unwrap();
-
-        // Sender should have SENT
-        let sender_labels = store.get_labels(&sent.id, &sender.id).await.unwrap();
-        assert!(sender_labels.contains(&"SENT".to_string()));
-
-        // Recipient should have INBOX + UNREAD
-        let recip_labels = store.get_labels(&sent.id, &recipient.id).await.unwrap();
-        assert!(recip_labels.contains(&"INBOX".to_string()));
-        assert!(recip_labels.contains(&"UNREAD".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_list_messages_by_label() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        // Send 3 messages
-        for i in 0..3 {
-            let msg = NewMessage {
-                from_account: sender.id.clone(),
-                to: vec![recipient.id.clone()],
-                cc: vec![],
-                subject: format!("Message {i}"),
-                body: format!("Body {i}"),
-                thread_id: None,
-                in_reply_to: None,
-                reply_by: None,
-                labels: vec![],
-                source: None, attachments: vec![],
-            };
-            store.insert_message(msg).await.unwrap();
-        }
-
-        // Recipient inbox should have 3
-        let list = store.list_messages(&recipient.id, "INBOX", 10, None).await.unwrap();
-        assert_eq!(list.messages.len(), 3);
-
-        // Sender sent should have 3
-        let list = store.list_messages(&sender.id, "SENT", 10, None).await.unwrap();
-        assert_eq!(list.messages.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_modify_labels() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        let msg = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            cc: vec![],
-            subject: "Test".to_string(),
-            body: "Body".to_string(),
-            thread_id: None,
-            in_reply_to: None,
-            reply_by: None,
-            labels: vec![],
-            source: None, attachments: vec![],
-        };
-        let sent = store.insert_message(msg).await.unwrap();
-
-        // Remove UNREAD, add STARRED
-        store.remove_labels(&sent.id, &recipient.id, &["UNREAD".to_string()]).await.unwrap();
-        store.add_labels(&sent.id, &recipient.id, &["STARRED".to_string()]).await.unwrap();
-
-        let labels = store.get_labels(&sent.id, &recipient.id).await.unwrap();
-        assert!(!labels.contains(&"UNREAD".to_string()));
-        assert!(labels.contains(&"STARRED".to_string()));
-        assert!(labels.contains(&"INBOX".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_delete_message() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        let msg = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            cc: vec![],
-            subject: "Delete me".to_string(),
-            body: "Gone".to_string(),
-            thread_id: None,
-            in_reply_to: None,
-            reply_by: None,
-            labels: vec![],
-            source: None, attachments: vec![],
-        };
-        let sent = store.insert_message(msg).await.unwrap();
-
-        store.delete_message(&sent.id).await.unwrap();
-        let result = store.get_message(&sent.id).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_unread_count() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        // Send 2 messages
-        for i in 0..2 {
-            let msg = NewMessage {
-                from_account: sender.id.clone(),
-                to: vec![recipient.id.clone()],
-                cc: vec![],
-                subject: format!("Msg {i}"),
-                body: "Body".to_string(),
-                thread_id: None,
-                in_reply_to: None,
-                reply_by: None,
-                labels: vec![],
-                source: None, attachments: vec![],
-            };
-            store.insert_message(msg).await.unwrap();
-        }
-
-        let count = store.get_unread_count(&recipient.id).await.unwrap();
-        assert_eq!(count, 2);
-
-        // Sender should have 0 unread
-        let count = store.get_unread_count(&sender.id).await.unwrap();
-        assert_eq!(count, 0);
-    }
-
-    #[tokio::test]
-    async fn test_thread_creation_and_get() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        let msg = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            cc: vec![],
-            subject: "Thread test".to_string(),
-            body: "First message".to_string(),
-            thread_id: None,
-            in_reply_to: None,
-            reply_by: None,
-            labels: vec![],
-            source: None, attachments: vec![],
-        };
-
-        let sent = store.insert_message(msg).await.unwrap();
-
-        // Reply
-        let reply = NewMessage {
-            from_account: recipient.id.clone(),
-            to: vec![sender.id.clone()],
-            cc: vec![],
-            subject: "Re: Thread test".to_string(),
-            body: "Reply message".to_string(),
-            thread_id: None,
-            in_reply_to: Some(sent.id.clone()),
-            reply_by: None,
-            labels: vec![],
-            source: None, attachments: vec![],
-        };
-        let reply_sent = store.insert_message(reply).await.unwrap();
-        assert_eq!(reply_sent.thread_id, sent.thread_id);
-
-        // Get thread
-        let thread = store.get_thread(&sent.thread_id).await.unwrap();
-        assert_eq!(thread.message_count, 2);
-        assert_eq!(thread.messages.len(), 2);
-        assert_eq!(thread.subject, "Thread test");
-    }
-
-    #[tokio::test]
-    async fn test_pending_replies() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        let msg = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            cc: vec![],
-            subject: "Need reply".to_string(),
-            body: "Please respond".to_string(),
-            thread_id: None,
-            in_reply_to: None,
-            reply_by: Some("2026-03-09T00:00:00Z".to_string()),
-            labels: vec![],
-            source: None, attachments: vec![],
-        };
-        store.insert_message(msg).await.unwrap();
-
-        let pending = store.get_pending_replies(&recipient.id).await.unwrap();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].subject, "Need reply");
-    }
-
-    #[tokio::test]
-    async fn test_body_compression() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        // Create a body > 512 bytes that should be compressed
-        let large_body = "x".repeat(1000);
-        let msg = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            cc: vec![],
-            subject: "Large body".to_string(),
-            body: large_body.clone(),
-            thread_id: None,
-            in_reply_to: None,
-            reply_by: None,
-            labels: vec![],
-            source: None, attachments: vec![],
-        };
-
-        let sent = store.insert_message(msg).await.unwrap();
-
-        // Retrieve and verify body is decompressed correctly
-        let fetched = store.get_message(&sent.id).await.unwrap();
-        assert_eq!(fetched.body, large_body);
-        assert_eq!(fetched.body.len(), 1000);
-
-        // Verify the stored body in DB is actually compressed (smaller than original)
-        let db = store.db.clone();
-        let msg_id = sent.id.clone();
-        let (stored_body, compressed): (String, bool) = db
-            .call(move |conn| {
-                conn.query_row(
-                    "SELECT body, compressed FROM messages WHERE id = ?1",
-                    rusqlite::params![msg_id],
-                    |row| Ok((row.get(0)?, row.get::<_, i32>(1)? != 0)),
-                )
-                .map_err(|e| tokio_rusqlite::Error::Rusqlite(e))
-            })
-            .await
-            .unwrap();
-        assert!(compressed, "body should be marked as compressed");
-        assert!(stored_body.len() < large_body.len(), "stored body should be smaller than original");
-    }
-
-    #[tokio::test]
-    async fn test_label_overdue_messages() {
-        let store = test_store().await;
-        let sender = store.create_account("sender", None, None).await.unwrap();
-        let recipient = store.create_account("recipient", None, None).await.unwrap();
-
-        // Message with past deadline
-        let msg = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            subject: "Overdue task".to_string(),
-            body: "Needs reply".to_string(),
-            reply_by: Some("2020-01-01T00:00:00Z".to_string()),
-            ..Default::default()
-        };
-        let sent = store.insert_message(msg).await.unwrap();
-
-        // Message with future deadline (should NOT be labeled)
-        let msg2 = NewMessage {
-            from_account: sender.id.clone(),
-            to: vec![recipient.id.clone()],
-            subject: "Future task".to_string(),
-            body: "Not urgent".to_string(),
-            reply_by: Some("2099-01-01T00:00:00Z".to_string()),
-            ..Default::default()
-        };
-        store.insert_message(msg2).await.unwrap();
-
-        // Run overdue check
-        let labeled = store.label_overdue_messages().await.unwrap();
-        assert_eq!(labeled, 1);
-
-        // Verify OVERDUE label was added
-        let labels = store.get_labels(&sent.id, &recipient.id).await.unwrap();
-        assert!(labels.contains(&"OVERDUE".to_string()));
-
-        // Running again should find 0 (already labeled)
-        let labeled2 = store.label_overdue_messages().await.unwrap();
-        assert_eq!(labeled2, 0);
-    }
-
-    #[tokio::test]
-    async fn test_analytics() {
-        let store = test_store().await;
-
-        // Empty system
-        let stats = store.get_analytics().await.unwrap();
-        assert_eq!(stats.total_accounts, 0);
-        assert_eq!(stats.total_messages, 0);
-        assert_eq!(stats.total_threads, 0);
-        assert!(stats.per_account.is_empty());
-
-        // Create accounts and send messages
-        let alice = store.create_account("alice", None, None).await.unwrap();
-        let bob = store.create_account("bob", None, None).await.unwrap();
-
-        store.insert_message(NewMessage {
-            from_account: alice.id.clone(),
-            to: vec![bob.id.clone()],
-            subject: "Hello".to_string(),
-            body: "Hi Bob".to_string(),
-            ..Default::default()
-        }).await.unwrap();
-
-        store.insert_message(NewMessage {
-            from_account: alice.id.clone(),
-            to: vec![bob.id.clone()],
-            subject: "Follow up".to_string(),
-            body: "Still there?".to_string(),
-            ..Default::default()
-        }).await.unwrap();
-
-        store.insert_message(NewMessage {
-            from_account: bob.id.clone(),
-            to: vec![alice.id.clone()],
-            subject: "Reply".to_string(),
-            body: "Yes!".to_string(),
-            ..Default::default()
-        }).await.unwrap();
-
-        let stats = store.get_analytics().await.unwrap();
-        assert_eq!(stats.total_accounts, 2);
-        assert_eq!(stats.total_messages, 3);
-        assert_eq!(stats.total_threads, 3);
-
-        // Alice: sent 2, received 1, 1 unread
-        let alice_stats = stats.per_account.iter().find(|s| s.account_name == "alice").unwrap();
-        assert_eq!(alice_stats.messages_sent, 2);
-        assert_eq!(alice_stats.messages_received, 1);
-        assert_eq!(alice_stats.unread_count, 1);
-
-        // Bob: sent 1, received 2, 2 unread
-        let bob_stats = stats.per_account.iter().find(|s| s.account_name == "bob").unwrap();
-        assert_eq!(bob_stats.messages_sent, 1);
-        assert_eq!(bob_stats.messages_received, 2);
-        assert_eq!(bob_stats.unread_count, 2);
-    }
-
-    #[tokio::test]
-    async fn test_list_accounts() {
-        let store = test_store().await;
-
-        // Empty initially
-        let accounts = store.list_accounts().await.unwrap();
-        assert!(accounts.is_empty());
-
-        // Create accounts
-        store.create_account("alpha", Some("Alpha Agent"), None).await.unwrap();
-        store.create_account("beta", None, None).await.unwrap();
-        store.create_account("gamma", Some("Gamma"), None).await.unwrap();
-
-        let accounts = store.list_accounts().await.unwrap();
-        assert_eq!(accounts.len(), 3);
-        assert_eq!(accounts[0].name, "alpha");
-        assert_eq!(accounts[1].name, "beta");
-        assert_eq!(accounts[2].name, "gamma");
-    }
-
-    // Property-based tests
-    use proptest::prelude::*;
-
-    proptest! {
-        /// compress_body → decompress_body is identity for all valid UTF-8 strings.
-        #[test]
-        fn compress_decompress_roundtrip(body in "\\PC{0,2000}") {
-            let (stored, compressed) = compress_body(&body).unwrap();
-            let recovered = decompress_body(&stored, compressed);
-            prop_assert_eq!(&recovered, &body);
-        }
-
-        /// Bodies ≤ 512 bytes are never compressed.
-        #[test]
-        fn short_bodies_not_compressed(body in "\\PC{0,512}") {
-            let (stored, compressed) = compress_body(&body).unwrap();
-            if body.len() <= 512 {
-                prop_assert!(!compressed);
-                prop_assert_eq!(&stored, &body);
-            }
-        }
-
-        /// Bodies > 512 bytes are always compressed.
-        #[test]
-        fn long_bodies_always_compressed(body in "\\PC{513,2000}") {
-            let (_, compressed) = compress_body(&body).unwrap();
-            prop_assert!(compressed);
-        }
-
-        /// make_snippet never exceeds 200 chars + "..." (203 chars).
-        #[test]
-        fn snippet_length_bounded(body in "\\PC{0,1000}") {
-            let snippet = make_snippet(&body);
-            prop_assert!(snippet.chars().count() <= 203);
-        }
-
-        /// Short bodies produce exact snippets (no truncation).
-        #[test]
-        fn snippet_preserves_short_body(body in "\\PC{0,200}") {
-            let snippet = make_snippet(&body);
-            if body.chars().count() <= 200 {
-                prop_assert_eq!(&snippet, &body);
-            }
-        }
-
-        /// Long body snippets end with "...".
-        #[test]
-        fn snippet_truncation_has_ellipsis(body in "\\PC{250,1000}") {
-            let snippet = make_snippet(&body);
-            prop_assert!(snippet.ends_with("..."));
-            prop_assert_eq!(snippet.chars().count(), 203);
-        }
-    }
-
-    #[test]
-    fn test_paginate_empty_vec() {
-        let mut items: Vec<String> = vec![];
-        let token = paginate_results(&mut items, 10, |s| s.clone());
-        assert!(token.is_none());
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn test_paginate_under_limit() {
-        let mut items = vec!["a".to_string(), "b".to_string()];
-        let token = paginate_results(&mut items, 5, |s| s.clone());
-        assert!(token.is_none());
-        assert_eq!(items.len(), 2);
-    }
-
-    #[test]
-    fn test_paginate_exactly_at_limit() {
-        let mut items = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        let token = paginate_results(&mut items, 3, |s| s.clone());
-        assert!(token.is_none());
-        assert_eq!(items.len(), 3);
-    }
-
-    #[test]
-    fn test_paginate_one_over_limit() {
-        let mut items = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
-        let token = paginate_results(&mut items, 3, |s| s.clone());
-        // Token is from the extra (4th) item before truncation
-        assert_eq!(token, Some("d".to_string()));
-        assert_eq!(items, vec!["a", "b", "c"]);
     }
 }

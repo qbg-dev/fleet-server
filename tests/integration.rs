@@ -2,6 +2,13 @@ use reqwest::{Client, header};
 use serde_json::{json, Value};
 use std::net::TcpListener;
 
+fn test_db_url() -> String {
+    let base = std::env::var("BORING_MAIL_TEST_DB_BASE")
+        .unwrap_or_else(|_| "mysql://root@localhost:3307".to_string());
+    let db_name = format!("test_int_{}", uuid::Uuid::new_v4().simple());
+    format!("{base}/{db_name}")
+}
+
 async fn spawn_server_with_config(max_body: usize) -> (String, Client) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -11,7 +18,8 @@ async fn spawn_server_with_config(max_body: usize) -> (String, Client) {
     let data_dir = tmp.path().to_path_buf();
     let config = boring_mail::config::Config {
         bind_addr: format!("127.0.0.1:{port}"),
-        db_path: data_dir.join("mail.db"),
+        database_url: test_db_url(),
+        max_db_connections: 5,
         blob_dir: data_dir.join("blobs"),
         data_dir,
         admin_token: None,
@@ -47,7 +55,8 @@ async fn spawn_server() -> (String, Client) {
     let data_dir = tmp.path().to_path_buf();
     let config = boring_mail::config::Config {
         bind_addr: format!("127.0.0.1:{port}"),
-        db_path: data_dir.join("mail.db"),
+        database_url: test_db_url(),
+        max_db_connections: 5,
         blob_dir: data_dir.join("blobs"),
         data_dir,
         admin_token: None,
@@ -2476,7 +2485,8 @@ async fn spawn_server_rate_limited(limit: u64) -> (String, Client) {
     let data_dir = tmp.path().to_path_buf();
     let config = boring_mail::config::Config {
         bind_addr: format!("127.0.0.1:{port}"),
-        db_path: data_dir.join("mail.db"),
+        database_url: test_db_url(),
+        max_db_connections: 5,
         blob_dir: data_dir.join("blobs"),
         data_dir,
         admin_token: None,

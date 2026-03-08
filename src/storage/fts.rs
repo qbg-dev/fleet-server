@@ -3,6 +3,7 @@ use crate::error::StorageError;
 use crate::search::filter::CompiledQuery;
 use crate::search::parser::SearchQuery;
 use crate::storage::SearchStore;
+use sqlx::Row;
 
 #[derive(Clone)]
 pub struct SqliteSearchStore {
@@ -24,48 +25,39 @@ impl SqliteSearchStore {
     ) -> Result<Vec<String>, StorageError> {
         let parsed = SearchQuery::parse(query_str);
         let compiled = CompiledQuery::from_query(&parsed, account_id);
-        self.db
-            .call(move |conn| {
-                let mut sql = String::from("SELECT m.id FROM messages m");
 
-                // Join FTS5 if text search needed
-                if let Some(ref fts) = compiled.fts_match {
-                    sql.push_str(" JOIN messages_fts fts ON m.rowid = fts.rowid");
-                    // We'll add MATCH condition below
-                    let _ = fts; // used in conditions
-                }
+        let mut sql = String::from("SELECT m.id FROM messages m");
 
-                sql.push_str(" WHERE ");
-                let mut all_conditions = compiled.conditions.clone();
+        // For FULLTEXT search in MySQL, we use MATCH...AGAINST on the messages table directly
+        // No separate FTS table join needed
 
-                // Add FTS match condition
-                let mut all_params = compiled.params.clone();
-                if let Some(ref fts) = compiled.fts_match {
-                    let idx = all_params.len() + 1;
-                    all_conditions.push(format!("messages_fts MATCH ?{idx}"));
-                    all_params.push(fts.clone());
-                }
+        sql.push_str(" WHERE ");
+        let mut all_conditions = compiled.conditions.clone();
 
-                sql.push_str(&all_conditions.join(" AND "));
-                sql.push_str(" ORDER BY m.internal_date DESC");
+        // Use LIKE for text search (Dolt doesn't support MATCH...AGAINST IN BOOLEAN MODE yet)
+        let mut all_params = compiled.params.clone();
+        if let Some(ref fts) = compiled.fts_match {
+            all_conditions.push("(m.subject LIKE ? OR m.body LIKE ?)".to_string());
+            let pattern = format!("%{fts}%");
+            all_params.push(pattern.clone());
+            all_params.push(pattern);
+        }
 
-                let limit_idx = all_params.len() + 1;
-                sql.push_str(&format!(" LIMIT ?{limit_idx}"));
-                all_params.push(max_results.to_string());
+        sql.push_str(&all_conditions.join(" AND "));
+        sql.push_str(" ORDER BY m.internal_date DESC");
+        sql.push_str(" LIMIT ?");
+        all_params.push(max_results.to_string());
 
-                let mut stmt = conn.prepare(&sql)?;
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                    all_params.iter().map(|p| p as &dyn rusqlite::types::ToSql).collect();
+        // Build the query with dynamic binds
+        let mut query = sqlx::query(&sql);
+        for param in &all_params {
+            query = query.bind(param);
+        }
 
-                let ids: Vec<String> = stmt
-                    .query_map(param_refs.as_slice(), |row| row.get(0))?
-                    .filter_map(|r| r.ok())
-                    .collect();
+        let rows = query.fetch_all(&self.db).await?;
+        let ids: Vec<String> = rows.iter().map(|r| r.get("id")).collect();
 
-                Ok(ids)
-            })
-            .await
-            .map_err(StorageError::from)
+        Ok(ids)
     }
 }
 
@@ -101,14 +93,27 @@ mod tests {
     use super::*;
     use crate::db::schema::init_schema;
     use crate::storage::models::NewMessage;
-    use crate::storage::sqlite::SqliteDataStore;
+    use crate::storage::sqlite::DoltDataStore;
     use crate::storage::DataStore;
+    use sqlx::mysql::MySqlPoolOptions;
 
-    async fn setup() -> (SqliteDataStore, SqliteSearchStore) {
-        let conn = tokio_rusqlite::Connection::open_in_memory().await.unwrap();
-        conn.call(|c| { init_schema(c).unwrap(); Ok(()) }).await.unwrap();
-        let store = SqliteDataStore::new(conn.clone());
-        let search = SqliteSearchStore::new(conn);
+    async fn setup() -> (DoltDataStore, SqliteSearchStore) {
+        let base_url = std::env::var("BORING_MAIL_TEST_DB_BASE")
+            .unwrap_or_else(|_| "mysql://root@localhost:3307".to_string());
+        let db_name = format!("test_fts_{}", uuid::Uuid::new_v4().simple());
+
+        let admin = MySqlPoolOptions::new().max_connections(1).connect(&base_url).await.unwrap();
+        sqlx::query(&format!("CREATE DATABASE `{db_name}`")).execute(&admin).await.unwrap();
+        admin.close().await;
+
+        let pool = MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect(&format!("{base_url}/{db_name}"))
+            .await.unwrap();
+        init_schema(&pool).await.unwrap();
+
+        let store = DoltDataStore::new(pool.clone());
+        let search = SqliteSearchStore::new(pool);
         (store, search)
     }
 

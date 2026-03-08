@@ -14,53 +14,49 @@ impl CompiledQuery {
     pub fn from_query(query: &SearchQuery, account_id: &str) -> Self {
         let mut conditions = Vec::new();
         let mut params = Vec::new();
-        let mut param_idx = 1;
 
-        // Always scope to account
-        conditions.push(format!(
-            "EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.account_id = ?{param_idx})"
-        ));
+        // Always scope to account (account_id is always first param)
+        conditions.push(
+            "EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.account_id = ?)".to_string()
+        );
         params.push(account_id.to_string());
-        param_idx += 1;
 
         for term in &query.terms {
             match term {
                 SearchTerm::From(name) => {
-                    conditions.push(format!(
-                        "EXISTS (SELECT 1 FROM accounts a WHERE a.id = m.from_account AND a.name = ?{param_idx})"
-                    ));
+                    conditions.push(
+                        "EXISTS (SELECT 1 FROM accounts a WHERE a.id = m.from_account AND a.name = ?)".to_string()
+                    );
                     params.push(name.clone());
-                    param_idx += 1;
                 }
                 SearchTerm::To(name) => {
-                    conditions.push(format!(
-                        "EXISTS (SELECT 1 FROM message_recipients mr JOIN accounts a ON a.id = mr.account_id WHERE mr.message_id = m.id AND a.name = ?{param_idx})"
-                    ));
+                    conditions.push(
+                        "EXISTS (SELECT 1 FROM message_recipients mr JOIN accounts a ON a.id = mr.account_id WHERE mr.message_id = m.id AND a.name = ?)".to_string()
+                    );
                     params.push(name.clone());
-                    param_idx += 1;
                 }
                 SearchTerm::Label(label) => {
-                    conditions.push(format!(
-                        "EXISTS (SELECT 1 FROM message_labels ml2 WHERE ml2.message_id = m.id AND ml2.account_id = ?1 AND ml2.label = ?{param_idx})"
-                    ));
+                    // For label filter, we need to reference the account_id again.
+                    // We push it as an additional param since MySQL doesn't support back-references.
+                    conditions.push(
+                        "EXISTS (SELECT 1 FROM message_labels ml2 WHERE ml2.message_id = m.id AND ml2.account_id = ? AND ml2.label = ?)".to_string()
+                    );
+                    params.push(account_id.to_string());
                     params.push(label.clone());
-                    param_idx += 1;
                 }
                 SearchTerm::HasAttachment => {
                     conditions.push("m.has_attachments = 1".to_string());
                 }
                 SearchTerm::Before(date) => {
-                    conditions.push(format!("m.internal_date < ?{param_idx}"));
+                    conditions.push("m.internal_date < ?".to_string());
                     params.push(date.clone());
-                    param_idx += 1;
                 }
                 SearchTerm::After(date) => {
-                    conditions.push(format!("m.internal_date > ?{param_idx}"));
+                    conditions.push("m.internal_date > ?".to_string());
                     params.push(date.clone());
-                    param_idx += 1;
                 }
                 SearchTerm::Text(_) => {
-                    // Handled via FTS5 join
+                    // Handled via FULLTEXT MATCH...AGAINST
                 }
             }
         }
@@ -97,7 +93,9 @@ mod tests {
         let compiled = CompiledQuery::from_query(&q, "account-123");
 
         assert!(compiled.conditions.iter().any(|c| c.contains("ml2.label")));
-        assert_eq!(compiled.params[1], "STARRED");
+        // Label condition pushes account_id again + label value
+        assert_eq!(compiled.params[1], "account-123");
+        assert_eq!(compiled.params[2], "STARRED");
     }
 
     #[test]

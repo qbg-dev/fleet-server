@@ -85,8 +85,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         Config {
             bind_addr: "127.0.0.1:0".to_string(),
+            database_url: "mysql://root@localhost:3307/test_blobs".to_string(),
+            max_db_connections: 1,
             data_dir: tmp.path().to_path_buf(),
-            db_path: tmp.path().join("mail.db"),
             blob_dir: tmp.path().join("blobs"),
             admin_token: None,
             registry_path: None,

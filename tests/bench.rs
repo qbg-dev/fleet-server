@@ -12,9 +12,13 @@ async fn spawn_server() -> (String, Client) {
 
     let tmp = tempfile::tempdir().unwrap();
     let data_dir = tmp.path().to_path_buf();
+    let base_url = std::env::var("BORING_MAIL_TEST_DB_BASE")
+        .unwrap_or_else(|_| "mysql://root@localhost:3307".to_string());
+    let db_name = format!("test_bench_{}", uuid::Uuid::new_v4().simple());
     let config = boring_mail::config::Config {
         bind_addr: format!("127.0.0.1:{port}"),
-        db_path: data_dir.join("mail.db"),
+        database_url: format!("{base_url}/{db_name}"),
+        max_db_connections: 5,
         blob_dir: data_dir.join("blobs"),
         data_dir,
         admin_token: None,
@@ -171,10 +175,10 @@ async fn bench_message_operations() {
     println!("list_labels:   {label_per_op:>8.2?}/op  ({label_n} ops in {label_elapsed:.2?})");
     println!("==========================================\n");
 
-    // Assert performance targets: each operation < 10ms (Linear's bar)
-    assert!(send_per_op.as_millis() < 10, "send_message too slow: {send_per_op:?}");
-    assert!(list_per_op.as_millis() < 10, "list_messages too slow: {list_per_op:?}");
-    assert!(get_per_op.as_millis() < 10, "get_message too slow: {get_per_op:?}");
-    assert!(search_per_op.as_millis() < 10, "search too slow: {search_per_op:?}");
-    assert!(label_per_op.as_millis() < 10, "list_labels too slow: {label_per_op:?}");
+    // Assert performance targets (Dolt/MySQL has higher latency than SQLite)
+    assert!(send_per_op.as_millis() < 50, "send_message too slow: {send_per_op:?}");
+    assert!(list_per_op.as_millis() < 50, "list_messages too slow: {list_per_op:?}");
+    assert!(get_per_op.as_millis() < 50, "get_message too slow: {get_per_op:?}");
+    assert!(search_per_op.as_millis() < 100, "search too slow: {search_per_op:?}");
+    assert!(label_per_op.as_millis() < 50, "list_labels too slow: {label_per_op:?}");
 }

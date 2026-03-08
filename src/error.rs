@@ -6,7 +6,7 @@ use serde_json::json;
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("database error: {0}")]
-    Database(#[from] tokio_rusqlite::Error),
+    Database(#[from] sqlx::Error),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("blob I/O error: {0}")]

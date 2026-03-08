@@ -5,6 +5,7 @@ use std::path::PathBuf;
 /// | Variable | Default | Field |
 /// |----------|---------|-------|
 /// | `BORING_MAIL_BIND` | `0.0.0.0:8025` | `bind_addr` |
+/// | `BORING_MAIL_DATABASE_URL` | `mysql://root@localhost:3307/mail_db` | `database_url` |
 /// | `BORING_MAIL_DATA_DIR` | `~/.boring-mail` | `data_dir` |
 /// | `BORING_MAIL_ADMIN_TOKEN` | none | `admin_token` |
 /// | `BORING_MAIL_REGISTRY` | none | `registry_path` |
@@ -12,10 +13,12 @@ use std::path::PathBuf;
 pub struct Config {
     /// TCP address to bind the HTTP server to.
     pub bind_addr: String,
-    /// Root directory for all persistent data.
+    /// MySQL/Dolt connection URL.
+    pub database_url: String,
+    /// Maximum database connections in the pool (default: 5).
+    pub max_db_connections: u32,
+    /// Root directory for persistent data (blobs, etc.).
     pub data_dir: PathBuf,
-    /// Path to the SQLite database file.
-    pub db_path: PathBuf,
     /// Directory for content-addressed blob storage.
     pub blob_dir: PathBuf,
     /// Optional admin bearer token for privileged operations.
@@ -39,14 +42,18 @@ impl Config {
                     dirs().to_string_lossy().to_string()
                 }),
         );
-        let db_path = data_dir.join("mail.db");
         let blob_dir = data_dir.join("blobs");
 
         Config {
             bind_addr: std::env::var("BORING_MAIL_BIND")
                 .unwrap_or_else(|_| "0.0.0.0:8025".to_string()),
+            database_url: std::env::var("BORING_MAIL_DATABASE_URL")
+                .unwrap_or_else(|_| "mysql://root@localhost:3307/mail_db".to_string()),
+            max_db_connections: std::env::var("BORING_MAIL_MAX_DB_CONNS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
             data_dir,
-            db_path,
             blob_dir,
             admin_token: std::env::var("BORING_MAIL_ADMIN_TOKEN").ok(),
             registry_path: std::env::var("BORING_MAIL_REGISTRY").ok().map(PathBuf::from),

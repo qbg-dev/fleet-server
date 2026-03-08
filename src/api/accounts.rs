@@ -24,10 +24,11 @@ pub async fn create_account(
         .create_account(name, req.display_name.as_deref(), req.bio.as_deref())
         .await
         .map_err(|e| {
-            if e.to_string().contains("UNIQUE constraint") {
+            let msg = e.to_string();
+            if msg.contains("UNIQUE constraint") || msg.contains("Duplicate entry") || msg.contains("duplicate unique key") {
                 ApiError::Conflict(format!("account already exists: {name}"))
             } else {
-                ApiError::BadRequest(e.to_string())
+                ApiError::BadRequest(msg)
             }
         })?;
 

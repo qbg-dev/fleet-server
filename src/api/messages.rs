@@ -247,7 +247,7 @@ pub async fn delete_message(
 /// List names are prefixed with "list:" (e.g., "list:team-updates").
 /// Deduplicates against explicit recipients and excludes the sender.
 async fn expand_list_recipients(
-    store: &crate::storage::sqlite::SqliteDataStore,
+    store: &crate::storage::sqlite::DoltDataStore,
     recipients: &[String],
     sender_id: &str,
 ) -> Result<Vec<String>, ApiError> {
@@ -284,7 +284,7 @@ fn is_message_participant(msg: &crate::storage::models::Message, account_id: &st
 
 /// Look up each recipient's tmux pane and send a notification.
 async fn notify_recipients(
-    store: &crate::storage::sqlite::SqliteDataStore,
+    store: &crate::storage::sqlite::DoltDataStore,
     recipients: &[String],
     from: &str,
     subject: &str,

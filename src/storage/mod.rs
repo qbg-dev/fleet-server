@@ -5,7 +5,7 @@
 //! - [`BlobStore`] — content-addressed blob storage (SHA-256 keys, zstd compression)
 //! - [`SearchStore`] — full-text search indexing and querying (FTS5)
 //!
-//! Implementations: [`sqlite::SqliteDataStore`], [`blob::FsBlobStore`], [`fts::SqliteSearchStore`].
+//! Implementations: [`sqlite::DoltDataStore`], [`blob::FsBlobStore`], [`fts::SqliteSearchStore`].
 
 pub mod models;
 pub mod sqlite;
