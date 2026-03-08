@@ -3,6 +3,7 @@ name = "boring-mail"
 version = "0.1.0"
 edition = "2024"
 description = "A Gmail-conformant mail server for AI agents"
+default-run = "boring-mail"
 
 [[bin]]
 name = "boring-mail"
@@ -26,6 +27,7 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
 tower = "0.5"
 base64 = "0.22"

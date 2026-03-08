@@ -105,6 +105,21 @@ impl DataStore for SqliteDataStore {
             .map_err(storage_err_from_tokio)
     }
 
+    async fn list_accounts(&self) -> Result<Vec<Account>, StorageError> {
+        self.db
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, name, display_name, bearer_token, tmux_pane_id, active, created_at FROM accounts ORDER BY created_at",
+                )?;
+                let accounts = stmt
+                    .query_map([], row_to_account)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(accounts)
+            })
+            .await
+            .map_err(StorageError::from)
+    }
+
     async fn update_pane(
         &self,
         account_id: &str,
@@ -1520,5 +1535,25 @@ mod tests {
         // Running again should find 0 (already labeled)
         let labeled2 = store.label_overdue_messages().await.unwrap();
         assert_eq!(labeled2, 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_accounts() {
+        let store = test_store().await;
+
+        // Empty initially
+        let accounts = store.list_accounts().await.unwrap();
+        assert!(accounts.is_empty());
+
+        // Create accounts
+        store.create_account("alpha", Some("Alpha Agent")).await.unwrap();
+        store.create_account("beta", None).await.unwrap();
+        store.create_account("gamma", Some("Gamma")).await.unwrap();
+
+        let accounts = store.list_accounts().await.unwrap();
+        assert_eq!(accounts.len(), 3);
+        assert_eq!(accounts[0].name, "alpha");
+        assert_eq!(accounts[1].name, "beta");
+        assert_eq!(accounts[2].name, "gamma");
     }
 }
