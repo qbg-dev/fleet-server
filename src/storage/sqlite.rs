@@ -211,8 +211,7 @@ impl DataStore for SqliteDataStore {
                 )?;
                 let labels: Vec<String> = stmt
                     .query_map(rusqlite::params![msg.id], |row| row.get(0))?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 // Load recipients
                 let mut stmt = conn.prepare(
@@ -225,8 +224,7 @@ impl DataStore for SqliteDataStore {
                             recipient_type: row.get(1)?,
                         })
                     })?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Message { labels, recipients, ..msg })
             })
@@ -363,8 +361,7 @@ impl DataStore for SqliteDataStore {
                 )?;
                 let labels: Vec<String> = stmt
                     .query_map(rusqlite::params![message_id, account_id], |row| row.get(0))?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(labels)
             })
             .await
@@ -405,8 +402,7 @@ impl DataStore for SqliteDataStore {
                             unread_count: row.get(3)?,
                         })
                     })?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(labels)
             })
@@ -629,8 +625,7 @@ impl DataStore for SqliteDataStore {
                 )?;
                 let members: Vec<String> = stmt
                     .query_map(rusqlite::params![list_id], |row| row.get(0))?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(members)
             })
             .await
@@ -695,8 +690,7 @@ impl DataStore for SqliteDataStore {
                 )?;
                 let messages: Vec<Message> = stmt
                     .query_map(rusqlite::params![thread.id], row_to_message)?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Thread { messages, ..thread })
             })
@@ -785,8 +779,7 @@ impl DataStore for SqliteDataStore {
                             sent_at: row.get(4)?,
                         })
                     })?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(replies)
             })
             .await
@@ -818,8 +811,7 @@ impl DataStore for SqliteDataStore {
                     .query_map(rusqlite::params![now], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                     })?
-                    .filter_map(|r| r.ok())
-                    .collect();
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 let count = overdue.len() as u32;
                 for (msg_id, account_id) in &overdue {
@@ -885,8 +877,7 @@ fn query_per_account_stats(
                 unread_count: row.get(5)?,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(stats)
 }
 
@@ -1151,8 +1142,7 @@ where
         params.iter().map(|p| p.as_ref()).collect();
     let mut items: Vec<T> = stmt
         .query_map(param_refs.as_slice(), row_mapper)?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let next_page_token = paginate_results(&mut items, q.max_results, token_fn);
     Ok((items, next_page_token))
