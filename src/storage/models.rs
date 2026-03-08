@@ -106,3 +106,22 @@ pub struct PendingReply {
     pub reply_by: Option<String>,
     pub sent_at: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountStats {
+    pub account_id: String,
+    pub account_name: String,
+    pub messages_sent: u32,
+    pub messages_received: u32,
+    pub threads_started: u32,
+    pub unread_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Analytics {
+    pub total_accounts: u32,
+    pub total_messages: u32,
+    pub total_threads: u32,
+    pub total_blobs: u32,
+    pub per_account: Vec<AccountStats>,
+}

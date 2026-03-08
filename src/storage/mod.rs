@@ -56,6 +56,9 @@ pub trait DataStore: Send + Sync + 'static {
 
     // Background
     async fn label_overdue_messages(&self) -> Result<u32, StorageError>;
+
+    // Analytics
+    async fn get_analytics(&self) -> Result<Analytics, StorageError>;
 }
 
 /// Content-addressed blob storage

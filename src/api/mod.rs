@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod auth;
 pub mod diagnostics;
 pub mod error;
@@ -57,6 +58,8 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         // Blobs
         .route("/api/blobs", post(blobs::upload_blob))
         .route("/api/blobs/{hash}", get(blobs::download_blob))
+        // Analytics
+        .route("/api/analytics", get(analytics::get_analytics))
         // Webhooks
         .route("/api/webhooks/git-commit", post(webhooks::git_commit))
         // Diagnostics middleware

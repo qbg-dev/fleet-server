@@ -1533,3 +1533,58 @@ async fn test_empty_recipients_rejected() {
         .send().await.unwrap();
     assert_eq!(resp.status(), 400);
 }
+
+#[tokio::test]
+async fn test_analytics_endpoint() {
+    let (base, client) = spawn_server().await;
+
+    // Create two accounts
+    let alice: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "alice"}))
+        .send().await.unwrap().json().await.unwrap();
+    let alice_token = alice["bearerToken"].as_str().unwrap();
+
+    let bob: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "bob"}))
+        .send().await.unwrap().json().await.unwrap();
+    let bob_id = bob["id"].as_str().unwrap();
+
+    // Send a message from alice to bob
+    client
+        .post(format!("{base}/api/messages/send"))
+        .bearer_auth(alice_token)
+        .json(&json!({
+            "to": [bob_id],
+            "subject": "Hello",
+            "body": "World"
+        }))
+        .send().await.unwrap();
+
+    // Get analytics
+    let resp = client
+        .get(format!("{base}/api/analytics"))
+        .bearer_auth(alice_token)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["totalAccounts"], 2);
+    assert_eq!(body["totalMessages"], 1);
+    assert_eq!(body["totalThreads"], 1);
+    assert_eq!(body["perAccount"].as_array().unwrap().len(), 2);
+
+    // Find alice's stats
+    let alice_stats = body["perAccount"].as_array().unwrap()
+        .iter().find(|s| s["accountName"] == "alice").unwrap();
+    assert_eq!(alice_stats["messagesSent"], 1);
+    assert_eq!(alice_stats["messagesReceived"], 0);
+
+    // Find bob's stats
+    let bob_stats = body["perAccount"].as_array().unwrap()
+        .iter().find(|s| s["accountName"] == "bob").unwrap();
+    assert_eq!(bob_stats["messagesSent"], 0);
+    assert_eq!(bob_stats["messagesReceived"], 1);
+    assert_eq!(bob_stats["unreadCount"], 1);
+}
