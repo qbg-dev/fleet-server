@@ -18,6 +18,7 @@ async fn spawn_server_with_config(max_body: usize) -> (String, Client) {
         registry_path: None,
         max_body_size: max_body,
         request_timeout_secs: 30,
+        rate_limit_per_minute: 0, // unlimited for integration tests
     };
 
     let db = boring_mail::db::connection::setup(&config).await.unwrap();
@@ -53,6 +54,7 @@ async fn spawn_server() -> (String, Client) {
         registry_path: None,
         max_body_size: 10 * 1024 * 1024,
         request_timeout_secs: 30,
+        rate_limit_per_minute: 0, // unlimited for integration tests
     };
 
     let db = boring_mail::db::connection::setup(&config).await.unwrap();
@@ -2459,4 +2461,158 @@ async fn test_blob_dedup() {
 
     // Both should return the same hash (content-addressed)
     assert_eq!(resp1["hash"], resp2["hash"], "same content should produce same hash");
+}
+
+// --- Rate Limiting Tests ---
+
+async fn spawn_server_rate_limited(limit: u64) -> (String, Client) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    let config = boring_mail::config::Config {
+        bind_addr: format!("127.0.0.1:{port}"),
+        db_path: data_dir.join("mail.db"),
+        blob_dir: data_dir.join("blobs"),
+        data_dir,
+        admin_token: None,
+        registry_path: None,
+        max_body_size: 10 * 1024 * 1024,
+        request_timeout_secs: 30,
+        rate_limit_per_minute: limit,
+    };
+
+    let db = boring_mail::db::connection::setup(&config).await.unwrap();
+    let app = boring_mail::api::router(db, &config);
+
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
+
+    tokio::spawn(async move {
+        let _tmp = tmp;
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    (format!("http://127.0.0.1:{port}"), Client::new())
+}
+
+#[tokio::test]
+async fn test_rate_limit_returns_429() {
+    let (base, client) = spawn_server_rate_limited(3).await;
+
+    // Register an account
+    let acct: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "rate-test"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    // First 3 requests should succeed (rate limit = 3/min)
+    for _ in 0..3 {
+        let resp = client
+            .get(format!("{base}/api/labels"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    // 4th request should be rate limited
+    let resp = client
+        .get(format!("{base}/api/labels"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+
+    // Should have Retry-After header
+    let retry_after = resp.headers().get("retry-after").unwrap().to_str().unwrap();
+    let secs: u64 = retry_after.parse().unwrap();
+    assert!(secs >= 1 && secs <= 60, "retry-after should be 1-60s, got {secs}");
+
+    // Body should be JSON error
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], 429);
+    assert_eq!(body["error"]["message"], "rate limit exceeded");
+}
+
+#[tokio::test]
+async fn test_rate_limit_per_account_isolation() {
+    let (base, client) = spawn_server_rate_limited(2).await;
+
+    // Register two accounts
+    let acct1: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "rate-a"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let acct2: Value = client
+        .post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "rate-b"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token1 = acct1["bearerToken"].as_str().unwrap();
+    let token2 = acct2["bearerToken"].as_str().unwrap();
+
+    // Exhaust account 1's limit
+    for _ in 0..2 {
+        let resp = client
+            .get(format!("{base}/api/labels"))
+            .bearer_auth(token1)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+    // Account 1 is now rate limited
+    let resp = client
+        .get(format!("{base}/api/labels"))
+        .bearer_auth(token1)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+
+    // Account 2 should still work fine
+    let resp = client
+        .get(format!("{base}/api/labels"))
+        .bearer_auth(token2)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "account 2 should not be affected by account 1's rate limit");
+}
+
+#[tokio::test]
+async fn test_rate_limit_unauthenticated_passes_through() {
+    let (base, client) = spawn_server_rate_limited(1).await;
+
+    // Unauthenticated requests should not be rate limited (they'll fail auth instead)
+    // Health endpoint has no auth requirement
+    for _ in 0..5 {
+        let resp = client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
 }

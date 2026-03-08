@@ -10,6 +10,7 @@ pub mod blobs;
 pub mod labels;
 pub mod lists;
 pub mod messages;
+pub mod rate_limit;
 pub mod search;
 pub mod threads;
 pub mod webhooks;
@@ -28,6 +29,7 @@ use crate::storage::sqlite::SqliteDataStore;
 use crate::storage::fts::SqliteSearchStore;
 use crate::storage::blob::FsBlobStore;
 use auth::AppState;
+use rate_limit::RateLimiter;
 
 pub fn router(db: DbPool, config: &Config) -> Router {
     let state = AppState {
@@ -35,6 +37,7 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         search: SqliteSearchStore::new(db),
         blobs: FsBlobStore::new(config),
     };
+    let rate_limiter = RateLimiter::new(config.rate_limit_per_minute);
 
     Router::new()
         // Health (no auth)
@@ -76,6 +79,9 @@ pub fn router(db: DbPool, config: &Config) -> Router {
             state.clone(),
             diagnostics::diagnostics_middleware,
         ))
+        // Per-account rate limiting (keyed by bearer token)
+        .layer(middleware::from_fn(rate_limit::rate_limit_middleware))
+        .layer(axum::Extension(rate_limiter))
         // Propagate x-request-id to response
         .layer(PropagateRequestIdLayer::x_request_id())
         // Response compression (gzip)

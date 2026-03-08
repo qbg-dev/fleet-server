@@ -27,6 +27,8 @@ pub struct Config {
     pub max_body_size: usize,
     /// Request timeout in seconds (default: 30).
     pub request_timeout_secs: u64,
+    /// Per-account rate limit in requests per minute (default: 60). 0 = unlimited.
+    pub rate_limit_per_minute: u64,
 }
 
 impl Config {
@@ -56,6 +58,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(30),
+            rate_limit_per_minute: std::env::var("BORING_MAIL_RATE_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60),
         }
     }
 }
