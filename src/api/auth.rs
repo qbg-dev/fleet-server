@@ -73,6 +73,17 @@ impl FromRequestParts<AppState> for AdminAuth {
     }
 }
 
+/// A real-time event pushed to WebSocket clients.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct MailEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// Account ID that should receive this event.
+    pub account_id: String,
+    #[serde(flatten)]
+    pub data: serde_json::Value,
+}
+
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
@@ -80,4 +91,5 @@ pub struct AppState {
     pub search: SqliteSearchStore,
     pub blobs: FsBlobStore,
     pub admin_token: Option<String>,
+    pub events_tx: tokio::sync::broadcast::Sender<MailEvent>,
 }

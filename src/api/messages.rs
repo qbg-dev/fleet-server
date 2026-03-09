@@ -41,6 +41,20 @@ pub async fn send_message(
 
     let sent = state.store.insert_message(msg).await.map_err(ApiError::from)?;
 
+    // Broadcast WebSocket events to recipients
+    for recipient_id in &notify_recipients_list {
+        let _ = state.events_tx.send(crate::api::auth::MailEvent {
+            event_type: "new_message".to_string(),
+            account_id: recipient_id.clone(),
+            data: json!({
+                "message_id": sent.id,
+                "from": notify_from,
+                "subject": notify_subject,
+                "thread_id": sent.thread_id,
+            }),
+        });
+    }
+
     // Fire-and-forget tmux notifications to recipients
     let store = state.store.clone();
     tokio::spawn(async move {

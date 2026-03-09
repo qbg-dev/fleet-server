@@ -13,8 +13,12 @@ path = "src/main.rs"
 name = "boring-mail-mcp"
 path = "src/mcp/main.rs"
 
+[[bin]]
+name = "boring-mail-tui"
+path = "src/tui/main.rs"
+
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 serde = { version = "1", features = ["derive"] }
@@ -32,6 +36,11 @@ tower = "0.5"
 base64 = "0.22"
 dashmap = "6"
 urlencoding = "2"
+anyhow = "1"
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+futures-util = "0.3"
 
 [dependencies.reqwest]
 version = "0.12"

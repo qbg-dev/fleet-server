@@ -14,6 +14,7 @@ pub mod rate_limit;
 pub mod search;
 pub mod threads;
 pub mod webhooks;
+pub mod ws;
 
 use axum::{Router, middleware, routing::{get, post, delete}};
 use axum::extract::DefaultBodyLimit;
@@ -32,11 +33,13 @@ use auth::AppState;
 use rate_limit::RateLimiter;
 
 pub fn router(db: DbPool, config: &Config) -> Router {
+    let (events_tx, _) = tokio::sync::broadcast::channel(256);
     let state = AppState {
         store: DoltDataStore::new(db.clone()),
         search: SqliteSearchStore::new(db),
         blobs: FsBlobStore::new(config),
         admin_token: config.admin_token.clone(),
+        events_tx,
     };
     let rate_limiter = RateLimiter::new(config.rate_limit_per_minute);
 
@@ -81,6 +84,8 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         .route("/api/analytics", get(analytics::get_analytics))
         // Webhooks
         .route("/api/webhooks/git-commit", post(webhooks::git_commit))
+        // WebSocket (real-time events)
+        .route("/ws", get(ws::ws_handler))
         // Diagnostics middleware
         .layer(middleware::from_fn_with_state(
             state.clone(),
