@@ -17,39 +17,53 @@ pub async fn ws_handler(
     Query(params): Query<WsParams>,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let account = state
-        .store
-        .get_account_by_token(&params.token)
-        .await
-        .map_err(|_| ApiError::Unauthorized)?;
+    // Admin token → unfiltered mode (receives ALL events for all accounts)
+    let is_admin = state.admin_token.as_deref() == Some(&params.token);
 
-    if !account.active {
-        return Err(ApiError::Forbidden);
-    }
+    let account_id_filter = if is_admin {
+        None
+    } else {
+        let account = state
+            .store
+            .get_account_by_token(&params.token)
+            .await
+            .map_err(|_| ApiError::Unauthorized)?;
+
+        if !account.active {
+            return Err(ApiError::Forbidden);
+        }
+
+        Some(account.id.clone())
+    };
 
     let rx = state.events_tx.subscribe();
-    let account_id = account.id.clone();
 
-    Ok(ws.on_upgrade(move |socket| handle_socket(socket, rx, account_id)))
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, rx, account_id_filter)))
 }
 
 async fn handle_socket(
     mut socket: WebSocket,
     mut rx: tokio::sync::broadcast::Receiver<MailEvent>,
-    account_id: String,
+    account_id_filter: Option<String>,
 ) {
     loop {
         tokio::select! {
             result = rx.recv() => {
                 match result {
-                    Ok(event) if event.account_id == account_id => {
-                        let json = serde_json::to_string(&event).unwrap_or_default();
-                        if socket.send(Message::Text(json.into())).await.is_err() {
-                            break;
+                    Ok(event) => {
+                        let should_forward = match &account_id_filter {
+                            None => true, // admin: forward all events
+                            Some(id) => event.account_id == *id,
+                        };
+                        if should_forward {
+                            let json = serde_json::to_string(&event).unwrap_or_default();
+                            if socket.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    _ => {} // skip events for other accounts, or lagged
+                    _ => {} // lagged — skip
                 }
             }
             msg = socket.recv() => {
