@@ -206,7 +206,7 @@ impl DataStore for DoltDataStore {
         let all_recipients: Vec<&str> = msg.to.iter().chain(msg.cc.iter()).map(|s| s.as_str()).collect();
         update_thread_metadata(&mut tx, &thread_id, &msg.from_account, &all_recipients, &snippet, &now).await?;
 
-        // FTS is auto-managed by FULLTEXT index in MySQL — no manual insert needed
+        // FTS is handled via LIKE queries — no manual FTS5 insert needed
 
         let has_attachments = attach_blobs(&mut tx, &msg_id, &msg.attachments).await?;
 
@@ -331,7 +331,7 @@ impl DataStore for DoltDataStore {
     ) -> Result<(), StorageError> {
         for label in labels {
             sqlx::query(
-                "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
             )
             .bind(message_id)
             .bind(account_id)
@@ -385,12 +385,12 @@ impl DataStore for DoltDataStore {
             "SELECT ml.label,
                     COALESCE(l.label_type, 'user') as label_type,
                     COUNT(*) as message_count,
-                    CAST(SUM(CASE WHEN EXISTS(
+                    SUM(CASE WHEN EXISTS(
                         SELECT 1 FROM message_labels ul
                         WHERE ul.message_id = ml.message_id
                         AND ul.account_id = ml.account_id
                         AND ul.label = 'UNREAD'
-                    ) THEN 1 ELSE 0 END) AS SIGNED) as unread_count
+                    ) THEN 1 ELSE 0 END) as unread_count
              FROM message_labels ml
              LEFT JOIN labels l ON l.name = ml.label AND (l.account_id IS NULL OR l.account_id = ml.account_id)
              WHERE ml.account_id = ?
@@ -427,7 +427,7 @@ impl DataStore for DoltDataStore {
         .bind(blob_hash)
         .bind(filename)
         .bind(content_type)
-        .bind(size)
+        .bind(size as i64)
         .execute(&self.db)
         .await?;
 
@@ -513,7 +513,7 @@ impl DataStore for DoltDataStore {
         for msg_id in message_ids {
             for label in add {
                 sqlx::query(
-                    "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
                 )
                 .bind(msg_id)
                 .bind(account_id)
@@ -556,7 +556,7 @@ impl DataStore for DoltDataStore {
         list_id: &str,
         account_id: &str,
     ) -> Result<(), StorageError> {
-        sqlx::query("INSERT IGNORE INTO list_members (list_id, account_id) VALUES (?, ?)")
+        sqlx::query("INSERT OR IGNORE INTO list_members (list_id, account_id) VALUES (?, ?)")
             .bind(list_id)
             .bind(account_id)
             .execute(&self.db)
@@ -735,7 +735,7 @@ impl DataStore for DoltDataStore {
             let msg_id: String = row.get("id");
             let acct_id: String = row.get("account_id");
             sqlx::query(
-                "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'OVERDUE')",
+                "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'OVERDUE')",
             )
             .bind(&msg_id)
             .bind(&acct_id)
@@ -799,7 +799,7 @@ async fn query_per_account_stats(pool: &DbPool) -> Result<Vec<AccountStats>, sql
         .collect())
 }
 
-fn row_to_message(row: &sqlx::mysql::MySqlRow) -> Message {
+fn row_to_message(row: &sqlx::sqlite::SqliteRow) -> Message {
     let stored_body: String = row.get("body");
     let compressed: bool = row.get::<i32, _>("compressed") != 0;
     Message {
@@ -820,10 +820,10 @@ fn row_to_message(row: &sqlx::mysql::MySqlRow) -> Message {
     }
 }
 
-fn row_to_thread(row: &sqlx::mysql::MySqlRow) -> Thread {
-    let participants_str: serde_json::Value = row.get("participants");
+fn row_to_thread(row: &sqlx::sqlite::SqliteRow) -> Thread {
+    let participants_str: String = row.get("participants");
     let participants: Vec<String> =
-        serde_json::from_value(participants_str).unwrap_or_default();
+        serde_json::from_str(&participants_str).unwrap_or_default();
     Thread {
         id: row.get("id"),
         subject: row.get("subject"),
@@ -835,7 +835,7 @@ fn row_to_thread(row: &sqlx::mysql::MySqlRow) -> Thread {
     }
 }
 
-fn row_to_account(row: &sqlx::mysql::MySqlRow) -> Account {
+fn row_to_account(row: &sqlx::sqlite::SqliteRow) -> Account {
     Account {
         id: row.get("id"),
         name: row.get("name"),
@@ -874,7 +874,7 @@ fn make_snippet(body: &str) -> String {
 
 /// Resolve thread ID: use explicit, inherit from parent, or create new.
 async fn resolve_thread(
-    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     msg: &NewMessage,
     snippet: &str,
     now: &str,
@@ -928,7 +928,7 @@ fn compress_body(body: &str) -> Result<(String, bool), StorageError> {
 
 /// Insert recipients and assign labels (SENT for sender, INBOX+UNREAD for recipients).
 async fn insert_recipients_and_labels(
-    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     msg_id: &str,
     msg: &NewMessage,
 ) -> Result<(), StorageError> {
@@ -963,14 +963,14 @@ async fn insert_recipients_and_labels(
     // Recipients get INBOX + UNREAD
     for recip in msg.to.iter().chain(msg.cc.iter()) {
         sqlx::query(
-            "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'INBOX')",
+            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'INBOX')",
         )
         .bind(msg_id)
         .bind(recip)
         .execute(&mut **tx)
         .await?;
         sqlx::query(
-            "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'UNREAD')",
+            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'UNREAD')",
         )
         .bind(msg_id)
         .bind(recip)
@@ -981,7 +981,7 @@ async fn insert_recipients_and_labels(
     // Custom labels
     for label in &msg.labels {
         sqlx::query(
-            "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, ?)",
         )
         .bind(msg_id)
         .bind(&msg.from_account)
@@ -990,7 +990,7 @@ async fn insert_recipients_and_labels(
         .await?;
         if label == "ISSUE" {
             sqlx::query(
-                "INSERT IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'OPEN')",
+                "INSERT OR IGNORE INTO message_labels (message_id, account_id, label) VALUES (?, ?, 'OPEN')",
             )
             .bind(msg_id)
             .bind(&msg.from_account)
@@ -1004,7 +1004,7 @@ async fn insert_recipients_and_labels(
 
 /// Update thread metadata after inserting a message.
 async fn update_thread_metadata(
-    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     thread_id: &str,
     from: &str,
     recipients: &[&str],
@@ -1067,7 +1067,7 @@ async fn run_paginated_list<T, F, G>(
     token_fn: G,
 ) -> Result<(Vec<T>, Option<String>), StorageError>
 where
-    F: Fn(&sqlx::mysql::MySqlRow) -> T,
+    F: Fn(&sqlx::sqlite::SqliteRow) -> T,
     G: FnOnce(&T) -> String,
 {
     let limit = q.max_results + 1;
@@ -1109,7 +1109,7 @@ where
 
 /// Link blob attachments to a message and set has_attachments flag.
 async fn attach_blobs(
-    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     msg_id: &str,
     attachments: &[String],
 ) -> Result<bool, StorageError> {

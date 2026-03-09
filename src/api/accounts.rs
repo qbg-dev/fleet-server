@@ -1,5 +1,5 @@
 use axum::{extract::{Path, Query, State}, Json};
-use crate::api::auth::{AppState, AuthAccount};
+use crate::api::auth::{AdminAuth, AppState, AuthAccount};
 use crate::api::models::{CreateAccountRequest, UpdatePaneRequest, UpdateProfileRequest};
 use crate::error::ApiError;
 use crate::storage::DataStore;
@@ -181,6 +181,31 @@ async fn get_account_by_id(id: &str, state: &AppState) -> Result<Json<Value>, Ap
         "tmuxPaneId": account.tmux_pane_id,
         "active": account.active,
         "createdAt": account.created_at,
+    })))
+}
+
+/// POST /api/admin/accounts/:name/reset-token — admin resets any account's token by name
+pub async fn admin_reset_token(
+    _admin: AdminAuth,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let account = state
+        .store
+        .get_account_by_name(&name)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("account '{name}' not found")))?;
+
+    let account = state
+        .store
+        .reset_token(&account.id)
+        .await
+        .map_err(ApiError::from)?;
+
+    Ok(Json(json!({
+        "id": account.id,
+        "name": account.name,
+        "bearerToken": account.bearer_token,
     })))
 }
 

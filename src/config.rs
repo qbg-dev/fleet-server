@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// | Variable | Default | Field |
 /// |----------|---------|-------|
 /// | `BORING_MAIL_BIND` | `0.0.0.0:8025` | `bind_addr` |
-/// | `BORING_MAIL_DATABASE_URL` | `mysql://root@localhost:3307/mail_db` | `database_url` |
+/// | `BORING_MAIL_DATABASE_URL` | `sqlite:~/.boring-mail/mail.db?mode=rwc` | `database_url` |
 /// | `BORING_MAIL_DATA_DIR` | `~/.boring-mail` | `data_dir` |
 /// | `BORING_MAIL_ADMIN_TOKEN` | none | `admin_token` |
 /// | `BORING_MAIL_REGISTRY` | none | `registry_path` |
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 pub struct Config {
     /// TCP address to bind the HTTP server to.
     pub bind_addr: String,
-    /// MySQL/Dolt connection URL.
+    /// SQLite connection URL.
     pub database_url: String,
     /// Maximum database connections in the pool (default: 5).
     pub max_db_connections: u32,
@@ -43,12 +43,16 @@ impl Config {
                 }),
         );
         let blob_dir = data_dir.join("blobs");
+        let database_url = std::env::var("BORING_MAIL_DATABASE_URL")
+            .unwrap_or_else(|_| {
+                let path = data_dir.join("mail.db");
+                format!("sqlite:{}?mode=rwc", path.display())
+            });
 
         Config {
             bind_addr: std::env::var("BORING_MAIL_BIND")
                 .unwrap_or_else(|_| "0.0.0.0:8025".to_string()),
-            database_url: std::env::var("BORING_MAIL_DATABASE_URL")
-                .unwrap_or_else(|_| "mysql://root@localhost:3307/mail_db".to_string()),
+            database_url,
             max_db_connections: std::env::var("BORING_MAIL_MAX_DB_CONNS")
                 .ok()
                 .and_then(|v| v.parse().ok())

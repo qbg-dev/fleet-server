@@ -1,37 +1,38 @@
 use crate::config::Config;
-use sqlx::mysql::MySqlPoolOptions;
-use sqlx::MySqlPool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteJournalMode};
+use sqlx::SqlitePool;
+use std::str::FromStr;
 
-pub type DbPool = MySqlPool;
+pub type DbPool = SqlitePool;
 
 pub async fn setup(config: &Config) -> Result<DbPool, Box<dyn std::error::Error + Send + Sync>> {
     // Ensure blob directory exists
     std::fs::create_dir_all(&config.blob_dir)?;
 
-    // Auto-create the database if it doesn't exist
-    if let Some(slash_pos) = config.database_url.rfind('/') {
-        let base_url = &config.database_url[..slash_pos];
-        let db_name = &config.database_url[slash_pos + 1..];
-        if !db_name.is_empty() {
-            let admin = MySqlPoolOptions::new()
-                .max_connections(1)
-                .connect(base_url)
-                .await?;
-            sqlx::query(&format!("CREATE DATABASE IF NOT EXISTS `{db_name}`"))
-                .execute(&admin)
-                .await?;
-            admin.close().await;
-        }
-    }
+    // Build SQLite path from database_url or default to data_dir/mail.db
+    let db_path = if config.database_url.starts_with("sqlite:") {
+        config.database_url.clone()
+    } else {
+        let path = config.data_dir.join("mail.db");
+        format!("sqlite:{}?mode=rwc", path.display())
+    };
 
-    let pool = MySqlPoolOptions::new()
+    let opts = SqliteConnectOptions::from_str(&db_path)?
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .foreign_keys(true);
+
+    let pool = SqlitePoolOptions::new()
         .max_connections(config.max_db_connections)
-        .connect(&config.database_url)
+        .connect_with(opts)
         .await?;
+
+    // Enable WAL mode for better concurrent read performance
+    sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
 
     // Initialize schema
     crate::db::schema::init_schema(&pool).await?;
 
-    tracing::info!("database connected to {}", config.database_url);
+    tracing::info!("database connected to {}", db_path);
     Ok(pool)
 }

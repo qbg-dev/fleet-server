@@ -36,6 +36,7 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         store: DoltDataStore::new(db.clone()),
         search: SqliteSearchStore::new(db),
         blobs: FsBlobStore::new(config),
+        admin_token: config.admin_token.clone(),
     };
     let rate_limiter = RateLimiter::new(config.rate_limit_per_minute);
 
@@ -74,6 +75,8 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         // Blobs
         .route("/api/blobs", post(blobs::upload_blob))
         .route("/api/blobs/{hash}", get(blobs::download_blob))
+        // Admin (master token required)
+        .route("/api/admin/accounts/{name}/reset-token", post(accounts::admin_reset_token))
         // Analytics
         .route("/api/analytics", get(analytics::get_analytics))
         // Webhooks

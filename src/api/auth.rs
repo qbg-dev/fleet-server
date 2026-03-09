@@ -43,10 +43,41 @@ impl FromRequestParts<AppState> for AuthAccount {
     }
 }
 
+/// Admin token extracted from Bearer header — only matches the master admin token.
+pub struct AdminAuth;
+
+impl FromRequestParts<AppState> for AdminAuth {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let admin_token = state.admin_token.as_deref().ok_or(ApiError::Unauthorized)?;
+
+        let header = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or(ApiError::Unauthorized)?;
+
+        let token = header
+            .strip_prefix("Bearer ")
+            .ok_or(ApiError::Unauthorized)?;
+
+        if token != admin_token {
+            return Err(ApiError::Unauthorized);
+        }
+
+        Ok(AdminAuth)
+    }
+}
+
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
     pub store: DoltDataStore,
     pub search: SqliteSearchStore,
     pub blobs: FsBlobStore,
+    pub admin_token: Option<String>,
 }

@@ -28,13 +28,12 @@ impl SqliteSearchStore {
 
         let mut sql = String::from("SELECT m.id FROM messages m");
 
-        // For FULLTEXT search in MySQL, we use MATCH...AGAINST on the messages table directly
-        // No separate FTS table join needed
+        // Use LIKE for text search on the messages table directly
 
         sql.push_str(" WHERE ");
         let mut all_conditions = compiled.conditions.clone();
 
-        // Use LIKE for text search (Dolt doesn't support MATCH...AGAINST IN BOOLEAN MODE yet)
+        // Use LIKE for text search
         let mut all_params = compiled.params.clone();
         if let Some(ref fts) = compiled.fts_match {
             all_conditions.push("(m.subject LIKE ? OR m.body LIKE ?)".to_string());
@@ -95,20 +94,12 @@ mod tests {
     use crate::storage::models::NewMessage;
     use crate::storage::sqlite::DoltDataStore;
     use crate::storage::DataStore;
-    use sqlx::mysql::MySqlPoolOptions;
+    use sqlx::sqlite::SqlitePoolOptions;
 
     async fn setup() -> (DoltDataStore, SqliteSearchStore) {
-        let base_url = std::env::var("BORING_MAIL_TEST_DB_BASE")
-            .unwrap_or_else(|_| "mysql://root@localhost:3307".to_string());
-        let db_name = format!("test_fts_{}", uuid::Uuid::new_v4().simple());
-
-        let admin = MySqlPoolOptions::new().max_connections(1).connect(&base_url).await.unwrap();
-        sqlx::query(&format!("CREATE DATABASE `{db_name}`")).execute(&admin).await.unwrap();
-        admin.close().await;
-
-        let pool = MySqlPoolOptions::new()
+        let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(&format!("{base_url}/{db_name}"))
+            .connect("sqlite::memory:")
             .await.unwrap();
         init_schema(&pool).await.unwrap();
 
