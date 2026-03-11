@@ -6,6 +6,21 @@ use crate::error::ApiError;
 use crate::storage::models::NewMessage;
 use crate::storage::DataStore;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+
+/// Build an ID→name lookup by fetching the full account directory.
+/// Returns empty map on error (graceful degradation — IDs shown as-is).
+async fn build_id_name_map(store: &crate::storage::sqlite::DoltDataStore) -> HashMap<String, String> {
+    match store.list_accounts().await {
+        Ok(accounts) => accounts.into_iter().map(|a| (a.id, a.name)).collect(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+/// Resolve an account ID to its human-readable name, falling back to the raw ID.
+fn resolve_name(id: &str, map: &HashMap<String, String>) -> String {
+    map.get(id).cloned().unwrap_or_else(|| id.to_string())
+}
 
 /// POST /api/messages/send
 pub async fn send_message(
@@ -17,8 +32,9 @@ pub async fn send_message(
         return Err(ApiError::BadRequest("empty recipients".into()));
     }
 
-    // Expand mailing list recipients into individual account IDs
+    // Expand mailing list recipients and resolve names → account IDs
     let expanded_to = expand_list_recipients(&state.store, &req.to, &auth.0.id).await?;
+    let resolved_cc = resolve_recipient_ids(&state.store, &req.cc).await?;
 
     // Capture for notification before moving into NewMessage
     let notify_recipients_list = expanded_to.clone();
@@ -28,7 +44,7 @@ pub async fn send_message(
     let msg = NewMessage {
         from_account: auth.0.id,
         to: expanded_to,
-        cc: req.cc,
+        cc: resolved_cc,
         subject: req.subject,
         body: req.body,
         thread_id: req.thread_id,
@@ -81,6 +97,7 @@ pub async fn list_messages(
         .await
         .map_err(ApiError::from)?;
 
+    let names = build_id_name_map(&state.store).await;
     let messages: Vec<Value> = list
         .messages
         .iter()
@@ -90,7 +107,7 @@ pub async fn list_messages(
                 "threadId": m.thread_id,
                 "snippet": m.snippet,
                 "internalDate": m.internal_date,
-                "from": m.from_account,
+                "from": resolve_name(&m.from_account, &names),
                 "subject": m.subject,
             })
         })
@@ -130,12 +147,13 @@ pub async fn get_message(
         vec![]
     };
 
+    let names = build_id_name_map(&state.store).await;
     Ok(Json(json!({
         "id": msg.id,
         "threadId": msg.thread_id,
-        "from": msg.from_account,
-        "to": msg.recipients.iter().filter(|r| r.recipient_type == "to").map(|r| &r.account_id).collect::<Vec<_>>(),
-        "cc": msg.recipients.iter().filter(|r| r.recipient_type == "cc").map(|r| &r.account_id).collect::<Vec<_>>(),
+        "from": resolve_name(&msg.from_account, &names),
+        "to": msg.recipients.iter().filter(|r| r.recipient_type == "to").map(|r| resolve_name(&r.account_id, &names)).collect::<Vec<_>>(),
+        "cc": msg.recipients.iter().filter(|r| r.recipient_type == "cc").map(|r| resolve_name(&r.account_id, &names)).collect::<Vec<_>>(),
         "subject": msg.subject,
         "body": msg.body,
         "snippet": msg.snippet,
@@ -257,9 +275,10 @@ pub async fn delete_message(
     Ok(Json(json!({"deleted": true})))
 }
 
-/// Expand mailing list names in recipients to individual subscriber account IDs.
+/// Expand mailing list names in recipients and resolve account names to IDs.
 /// List names are prefixed with "list:" (e.g., "list:team-updates").
 /// Deduplicates against explicit recipients and excludes the sender.
+/// Returns account **IDs** (not names) for FK-safe insertion into message_recipients.
 async fn expand_list_recipients(
     store: &crate::storage::sqlite::DoltDataStore,
     recipients: &[String],
@@ -269,7 +288,7 @@ async fn expand_list_recipients(
 
     for recipient in recipients {
         if let Some(list_name) = recipient.strip_prefix("list:") {
-            // Look up list and expand to members
+            // Look up list and expand to members (already returns account IDs)
             let (list_id, _, _) = store
                 .get_list_by_name(list_name)
                 .await
@@ -282,12 +301,37 @@ async fn expand_list_recipients(
                     }
                 }
             }
-        } else if !expanded.contains(recipient) {
-            expanded.push(recipient.clone());
+        } else {
+            // Resolve account name → account ID
+            let account = store
+                .get_account_by_name(recipient)
+                .await
+                .map_err(|_| ApiError::BadRequest(format!("recipient not found: {recipient}")))?;
+            if !expanded.contains(&account.id) {
+                expanded.push(account.id);
+            }
         }
     }
 
     Ok(expanded)
+}
+
+/// Resolve a list of account names to account IDs.
+async fn resolve_recipient_ids(
+    store: &crate::storage::sqlite::DoltDataStore,
+    names: &[String],
+) -> Result<Vec<String>, ApiError> {
+    let mut ids = Vec::new();
+    for name in names {
+        let account = store
+            .get_account_by_name(name)
+            .await
+            .map_err(|_| ApiError::BadRequest(format!("cc recipient not found: {name}")))?;
+        if !ids.contains(&account.id) {
+            ids.push(account.id);
+        }
+    }
+    Ok(ids)
 }
 
 /// Check if an account is the sender or a recipient of a message.
@@ -304,7 +348,7 @@ async fn notify_recipients(
     subject: &str,
 ) {
     for recipient_id in recipients {
-        let account = match store.get_account_by_name(recipient_id).await {
+        let account = match store.get_account_by_id(recipient_id).await {
             Ok(a) => a,
             Err(_) => continue,
         };
