@@ -2,11 +2,9 @@ use reqwest::{Client, header};
 use serde_json::{json, Value};
 use std::net::TcpListener;
 
-fn test_db_url() -> String {
-    let base = std::env::var("BORING_MAIL_TEST_DB_BASE")
-        .unwrap_or_else(|_| "mysql://root@localhost:3307".to_string());
-    let db_name = format!("test_int_{}", uuid::Uuid::new_v4().simple());
-    format!("{base}/{db_name}")
+fn test_db_url(data_dir: &std::path::Path) -> String {
+    std::env::var("BORING_MAIL_TEST_DB_URL")
+        .unwrap_or_else(|_| format!("sqlite:{}/test.db?mode=rwc", data_dir.display()))
 }
 
 async fn spawn_server_with_config(max_body: usize) -> (String, Client) {
@@ -18,7 +16,7 @@ async fn spawn_server_with_config(max_body: usize) -> (String, Client) {
     let data_dir = tmp.path().to_path_buf();
     let config = boring_mail::config::Config {
         bind_addr: format!("127.0.0.1:{port}"),
-        database_url: test_db_url(),
+        database_url: test_db_url(&data_dir),
         max_db_connections: 5,
         blob_dir: data_dir.join("blobs"),
         data_dir,
@@ -55,7 +53,7 @@ async fn spawn_server() -> (String, Client) {
     let data_dir = tmp.path().to_path_buf();
     let config = boring_mail::config::Config {
         bind_addr: format!("127.0.0.1:{port}"),
-        database_url: test_db_url(),
+        database_url: test_db_url(&data_dir),
         max_db_connections: 5,
         blob_dir: data_dir.join("blobs"),
         data_dir,
@@ -2485,7 +2483,7 @@ async fn spawn_server_rate_limited(limit: u64) -> (String, Client) {
     let data_dir = tmp.path().to_path_buf();
     let config = boring_mail::config::Config {
         bind_addr: format!("127.0.0.1:{port}"),
-        database_url: test_db_url(),
+        database_url: test_db_url(&data_dir),
         max_db_connections: 5,
         blob_dir: data_dir.join("blobs"),
         data_dir,
@@ -2911,4 +2909,131 @@ async fn test_create_account_with_bio() {
     assert_eq!(resp["name"], "research-bot");
     assert_eq!(resp["bio"].as_str().unwrap(), "Searches the web for relevant information");
     assert!(resp.get("bearerToken").is_some());
+}
+
+// ── Session File Storage Tests ──────────────────────────────────────
+
+#[tokio::test]
+async fn test_upload_session_success() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sess-upload"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let resp: Value = client.put(format!("{base}/api/accounts/me/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .body(b"line1\nline2\n".to_vec())
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(resp.get("hash").is_some());
+    assert!(resp.get("size").is_some());
+    assert!(resp.get("synced_at").is_some());
+}
+
+#[tokio::test]
+async fn test_upload_session_empty_body_rejected() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sess-empty"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let status = client.put(format!("{base}/api/accounts/me/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .body(b"".to_vec())
+        .send().await.unwrap().status();
+
+    assert_eq!(status, 400);
+}
+
+#[tokio::test]
+async fn test_upload_session_no_auth() {
+    let (base, client) = spawn_server().await;
+    let status = client.put(format!("{base}/api/accounts/me/session"))
+        .body(b"data".to_vec())
+        .send().await.unwrap().status();
+
+    assert_eq!(status, 401);
+}
+
+#[tokio::test]
+async fn test_download_session_roundtrip() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sess-dl"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let content = b"transcript line 1\ntranscript line 2\n";
+    client.put(format!("{base}/api/accounts/me/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .body(content.to_vec())
+        .send().await.unwrap();
+
+    let resp = client.get(format!("{base}/api/accounts/sess-dl/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send().await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers().get("content-type").unwrap(), "application/x-ndjson");
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(body.as_ref(), content);
+}
+
+#[tokio::test]
+async fn test_download_session_no_session_uploaded() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sess-nosession"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let status = client.get(format!("{base}/api/accounts/sess-nosession/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send().await.unwrap().status();
+
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn test_download_session_nonexistent_account() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sess-auth"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let status = client.get(format!("{base}/api/accounts/nonexistent-xyz/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send().await.unwrap().status();
+
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn test_session_overwrite() {
+    let (base, client) = spawn_server().await;
+    let acct: Value = client.post(format!("{base}/api/accounts"))
+        .json(&json!({"name": "sess-overwrite"}))
+        .send().await.unwrap().json().await.unwrap();
+    let token = acct["bearerToken"].as_str().unwrap();
+
+    let r1: Value = client.put(format!("{base}/api/accounts/me/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .body(b"version1".to_vec())
+        .send().await.unwrap().json().await.unwrap();
+
+    let r2: Value = client.put(format!("{base}/api/accounts/me/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .body(b"version2".to_vec())
+        .send().await.unwrap().json().await.unwrap();
+
+    assert_ne!(r1["hash"], r2["hash"]);
+
+    let body = client.get(format!("{base}/api/accounts/sess-overwrite/session"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send().await.unwrap().bytes().await.unwrap();
+
+    assert_eq!(body.as_ref(), b"version2");
 }

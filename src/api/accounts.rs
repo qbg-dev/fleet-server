@@ -1,8 +1,14 @@
-use axum::{extract::{Path, Query, State}, Json};
+use axum::{
+    body::Bytes,
+    extract::{Path, Query, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
 use crate::api::auth::{AdminAuth, AppState, AuthAccount};
 use crate::api::models::{CreateAccountRequest, UpdatePaneRequest, UpdateProfileRequest};
 use crate::error::ApiError;
-use crate::storage::DataStore;
+use crate::storage::{BlobStore, DataStore};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -254,4 +260,63 @@ pub async fn directory(
         "directory": entries,
         "total": entries.len(),
     })))
+}
+
+/// PUT /api/accounts/me/session — upload session file (raw bytes)
+pub async fn upload_session(
+    auth: AuthAccount,
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    if body.is_empty() {
+        return Err(ApiError::BadRequest("empty body".into()));
+    }
+
+    let meta = state
+        .blobs
+        .store_blob(&body)
+        .await
+        .map_err(ApiError::from)?;
+
+    state
+        .store
+        .update_session_blob(&auth.0.id, &meta.hash)
+        .await
+        .map_err(ApiError::from)?;
+
+    Ok(Json(json!({
+        "hash": meta.hash,
+        "size": meta.size,
+        "synced_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string(),
+    })))
+}
+
+/// GET /api/accounts/:name/session — download session file by account name
+pub async fn download_session(
+    _auth: AuthAccount,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Response, ApiError> {
+    let hash = state
+        .store
+        .get_session_blob_hash(&name)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound(format!("no session file for account '{name}'")))?;
+
+    let data = state
+        .blobs
+        .get_blob(&hash)
+        .await
+        .map_err(ApiError::from)?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/x-ndjson"),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"session.jsonl\""),
+        ],
+        data,
+    )
+        .into_response())
 }

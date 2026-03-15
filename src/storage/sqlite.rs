@@ -37,7 +37,7 @@ impl DataStore for DoltDataStore {
         .await?;
 
         let row = sqlx::query(
-            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?",
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at, session_blob_hash, session_synced_at FROM accounts WHERE id = ?",
         )
         .bind(&id)
         .fetch_one(&self.db)
@@ -48,7 +48,7 @@ impl DataStore for DoltDataStore {
 
     async fn get_account_by_id(&self, id: &str) -> Result<Account, StorageError> {
         let row = sqlx::query(
-            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?",
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at, session_blob_hash, session_synced_at FROM accounts WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.db)
@@ -62,7 +62,7 @@ impl DataStore for DoltDataStore {
 
     async fn get_account_by_name(&self, name: &str) -> Result<Account, StorageError> {
         let row = sqlx::query(
-            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE name = ?",
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at, session_blob_hash, session_synced_at FROM accounts WHERE name = ?",
         )
         .bind(name)
         .fetch_optional(&self.db)
@@ -76,7 +76,7 @@ impl DataStore for DoltDataStore {
 
     async fn get_account_by_token(&self, token: &str) -> Result<Account, StorageError> {
         let row = sqlx::query(
-            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE bearer_token = ?",
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at, session_blob_hash, session_synced_at FROM accounts WHERE bearer_token = ?",
         )
         .bind(token)
         .fetch_optional(&self.db)
@@ -90,7 +90,7 @@ impl DataStore for DoltDataStore {
 
     async fn list_accounts(&self) -> Result<Vec<Account>, StorageError> {
         let rows = sqlx::query(
-            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts ORDER BY created_at",
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at, session_blob_hash, session_synced_at FROM accounts ORDER BY created_at",
         )
         .fetch_all(&self.db)
         .await?;
@@ -118,7 +118,7 @@ impl DataStore for DoltDataStore {
         }
 
         let row = sqlx::query(
-            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?",
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at, session_blob_hash, session_synced_at FROM accounts WHERE id = ?",
         )
         .bind(account_id)
         .fetch_one(&self.db)
@@ -162,13 +162,42 @@ impl DataStore for DoltDataStore {
         }
 
         let row = sqlx::query(
-            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at FROM accounts WHERE id = ?",
+            "SELECT id, name, display_name, bio, bearer_token, tmux_pane_id, active, created_at, session_blob_hash, session_synced_at FROM accounts WHERE id = ?",
         )
         .bind(account_id)
         .fetch_one(&self.db)
         .await?;
 
         Ok(row_to_account(&row))
+    }
+
+    async fn update_session_blob(&self, account_id: &str, blob_hash: &str) -> Result<(), StorageError> {
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
+        let result = sqlx::query(
+            "UPDATE accounts SET session_blob_hash = ?, session_synced_at = ? WHERE id = ?",
+        )
+        .bind(blob_hash)
+        .bind(&now)
+        .bind(account_id)
+        .execute(&self.db)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NotFound(format!("account {account_id}")));
+        }
+        Ok(())
+    }
+
+    async fn get_session_blob_hash(&self, account_name: &str) -> Result<Option<String>, StorageError> {
+        let row = sqlx::query(
+            "SELECT session_blob_hash FROM accounts WHERE name = ?",
+        )
+        .bind(account_name)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|_| StorageError::NotFound(format!("account {account_name}")))?;
+
+        Ok(row.get("session_blob_hash"))
     }
 
     async fn insert_message(&self, msg: NewMessage) -> Result<Message, StorageError> {
@@ -845,6 +874,8 @@ fn row_to_account(row: &sqlx::sqlite::SqliteRow) -> Account {
         tmux_pane_id: row.get("tmux_pane_id"),
         active: row.get::<i32, _>("active") != 0,
         created_at: row.get("created_at"),
+        session_blob_hash: row.get("session_blob_hash"),
+        session_synced_at: row.get("session_synced_at"),
     }
 }
 

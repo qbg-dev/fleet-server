@@ -17,6 +17,10 @@ pub struct Account {
     pub tmux_pane_id: Option<String>,
     pub active: bool,
     pub created_at: String,
+    /// SHA-256 hash of the latest session file blob.
+    pub session_blob_hash: Option<String>,
+    /// ISO timestamp of last session file sync.
+    pub session_synced_at: Option<String>,
 }
 
 /// A stored message with resolved labels and recipients.

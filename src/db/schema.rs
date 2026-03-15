@@ -188,6 +188,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await
     .ok(); // OK if already exists with different schema
 
+    // Session file storage — add columns if not present (migration-safe)
+    sqlx::query("ALTER TABLE accounts ADD COLUMN session_blob_hash TEXT")
+        .execute(pool).await.ok();
+    sqlx::query("ALTER TABLE accounts ADD COLUMN session_synced_at TEXT")
+        .execute(pool).await.ok();
+
     // Seed system labels
     let system_labels = [
         "INBOX", "SENT", "TRASH", "UNREAD", "STARRED", "DRAFT",

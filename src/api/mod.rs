@@ -16,7 +16,7 @@ pub mod threads;
 pub mod webhooks;
 pub mod ws;
 
-use axum::{Router, middleware, routing::{get, post, delete}};
+use axum::{Router, middleware, routing::{get, post, put, delete}};
 use axum::extract::DefaultBodyLimit;
 use tower_http::cors::{CorsLayer, Any};
 use tower_http::compression::CompressionLayer;
@@ -53,6 +53,8 @@ pub fn router(db: DbPool, config: &Config) -> Router {
         .route("/api/accounts/{id}", get(accounts::get_account))
         .route("/api/accounts/{id}/pane", post(accounts::update_pane))
         .route("/api/accounts/{id}/pending", get(accounts::pending))
+        .route("/api/accounts/me/session", put(accounts::upload_session))
+        .route("/api/accounts/{name}/session", get(accounts::download_session))
         // Directory
         .route("/api/directory", get(accounts::directory))
         // Messages
